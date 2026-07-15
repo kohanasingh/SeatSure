@@ -1,0 +1,25 @@
+{
+  "name": "seatsure",
+  "version": "0.0.1",
+  "private": true,
+  "packageManager": "pnpm@9.15.9",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @seatsure/shared build && pnpm -r --parallel dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm --filter @seatsure/shared build && pnpm -r typecheck",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "db:migrate": "pnpm --filter @seatsure/api db:migrate",
+    "db:generate": "pnpm --filter @seatsure/api db:generate",
+    "seed": "pnpm --filter @seatsure/api seed"
+  },
+  "devDependencies": {
+    "eslint": "^9.18.0",
+    "prettier": "^3.4.2",
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.20.0"
+  }
+}
