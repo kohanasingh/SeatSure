@@ -17,6 +17,7 @@ import {
   setAccessToken,
   silentRefresh,
 } from './api';
+import { refreshSocketAuth } from './socket';
 
 interface AuthContextValue {
   user: AuthUser | null;
@@ -49,6 +50,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
     setAccessToken(data.accessToken);
     setUser(data.user);
+    refreshSocketAuth(); // rejoin user:<id> room with the new identity
   }, []);
 
   const login = useCallback(
@@ -69,6 +71,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } finally {
       setAccessToken(null);
       setUser(null);
+      refreshSocketAuth();
     }
   }, []);
 

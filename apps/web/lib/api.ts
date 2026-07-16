@@ -9,6 +9,8 @@ export const setAccessToken = (token: string | null): void => {
   accessToken = token;
 };
 
+export const getAccessToken = (): string | null => accessToken;
+
 export interface AuthUser {
   id: string;
   email: string;
@@ -61,9 +63,52 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
     if (refreshed) res = await rawFetch(path, init);
   }
   if (!res.ok) {
-    const body = (await res.json().catch(() => null)) as { message?: string } | null;
-    throw new ApiError(res.status, body?.message ?? `Request failed (${res.status})`);
+    const body = (await res.json().catch(() => null)) as {
+      message?: string;
+      error?: { message?: string }; // tRPC error envelope
+    } | null;
+    throw new ApiError(
+      res.status,
+      body?.message ?? body?.error?.message ?? `Request failed (${res.status})`,
+    );
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
+}
+
+interface TrpcEnvelope<T> {
+  result?: { data: T };
+  error?: { message: string };
+}
+
+/**
+ * Authenticated tRPC calls from the browser (mutations and user-scoped
+ * queries) — goes through apiFetch so the silent-refresh-on-401 applies.
+ * The public SSR reads use the typed client in lib/trpc.ts instead.
+ */
+export async function trpcMutate<T>(
+  procedure: string,
+  input: unknown,
+  headers: Record<string, string> = {},
+): Promise<T> {
+  const envelope = await apiFetch<TrpcEnvelope<T>>(`/trpc/${procedure}`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+    headers,
+  }).catch((err: unknown) => {
+    throw err instanceof ApiError ? err : new ApiError(0, 'Network error');
+  });
+  if (envelope.error || !envelope.result) {
+    throw new ApiError(400, envelope.error?.message ?? 'Request failed');
+  }
+  return envelope.result.data;
+}
+
+export async function trpcQuery<T>(procedure: string, input: unknown): Promise<T> {
+  const encoded = encodeURIComponent(JSON.stringify(input));
+  const envelope = await apiFetch<TrpcEnvelope<T>>(`/trpc/${procedure}?input=${encoded}`);
+  if (envelope.error || !envelope.result) {
+    throw new ApiError(400, envelope.error?.message ?? 'Request failed');
+  }
+  return envelope.result.data;
 }

@@ -3,6 +3,7 @@ import * as trpcExpress from '@trpc/server/adapters/express';
 import type { Request, RequestHandler } from 'express';
 import { TokenService } from '../auth/token.service';
 import { BookingsService } from '../bookings/bookings.service';
+import { QueueStatsService } from '../bookings/queue-stats.service';
 import { EventsAdminService } from '../events/events-admin.service';
 import { EventsService } from '../events/events.service';
 import { AppRouter, createAppRouter } from './app.router';
@@ -17,8 +18,9 @@ export class TrpcService {
     events: EventsService,
     admin: EventsAdminService,
     bookings: BookingsService,
+    queueStats: QueueStatsService,
   ) {
-    this.router = createAppRouter({ events, admin, bookings });
+    this.router = createAppRouter({ events, admin, bookings, queueStats });
   }
 
   /** Same access JWT as the REST guards — read from the Authorization header. */

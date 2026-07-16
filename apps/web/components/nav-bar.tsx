@@ -14,6 +14,9 @@ export function NavBar() {
       <nav className="flex items-center gap-4 text-sm">
         {loading ? null : user ? (
           <>
+            <Link href="/bookings" className="font-medium hover:underline">
+              My bookings
+            </Link>
             <span className="text-gray-600">{user.email}</span>
             <button
               type="button"

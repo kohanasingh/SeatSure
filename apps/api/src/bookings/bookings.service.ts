@@ -1,9 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Booking, Prisma } from '@prisma/client';
 import { CreateBookingInput } from '@seatsure/shared';
 import { TRPCError } from '@trpc/server';
+import { Queue } from 'bullmq';
 import Redis from 'ioredis';
 import { AuthenticatedUser } from '../auth/types';
 import {
@@ -12,12 +13,26 @@ import {
   PaymentProvider,
 } from '../payments/payment.provider';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  BOOKINGS_QUEUE,
+  BookingsJobData,
+  PROCESS_BOOKING_JOB,
+  ProcessBookingJobData,
+  SEND_CONFIRMATION_JOB,
+} from '../queue/bookings-queue.module';
 import { REDIS_CLIENT } from '../redis/redis.constants';
+import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { LockService } from './lock.service';
 
 const IDEM_TTL_SECONDS = 24 * 60 * 60; // spec §5: idem:<userId>:<key> → bookingId, 24h
 const TX_OPTIONS = { maxWait: 10_000, timeout: 20_000 } as const;
 const PAYMENT_METHODS = ['credit_card', 'debit_card', 'upi', 'wallet'] as const;
+const JOB_OPTIONS = {
+  attempts: 3,
+  backoff: { type: 'exponential', delay: 1_000 },
+  removeOnComplete: { count: 1_000 }, // kept around for admin.queueStats avgMs
+  removeOnFail: { count: 1_000 },
+} as const;
 
 type Tx = Prisma.TransactionClient;
 
@@ -60,8 +75,17 @@ class PaymentDeclinedError extends Error {
   }
 }
 
+/** Internal: seat lock held by someone else while processing a queued job — retryable. */
+export class SeatLockBusyError extends Error {
+  constructor() {
+    super('Seat lock busy');
+  }
+}
+
 const conflict = (message: 'SEAT_TAKEN' | 'SOLD_OUT'): TRPCError =>
   new TRPCError({ code: 'CONFLICT', message });
+
+const TERMINAL_BUSINESS_ERRORS = new Set(['SEAT_TAKEN', 'SOLD_OUT', 'EVENT_NOT_ON_SALE']);
 
 /**
  * The atomic booking core (ARCHITECTURE.md §3). One Prisma transaction:
@@ -69,14 +93,21 @@ const conflict = (message: 'SEAT_TAKEN' | 'SOLD_OUT'): TRPCError =>
  * booking row → mock charge → transactions row. Anything throws, everything
  * rolls back — no state where a seat is booked without a booking, or a
  * booking exists without a transaction record.
+ *
+ * Path A (direct) and Path B (queued, on lock contention) run the exact same
+ * transaction methods; Path B upserts over the PENDING row it created first.
  */
 @Injectable()
 export class BookingsService {
+  private readonly logger = new Logger(BookingsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly locks: LockService,
+    private readonly gateway: RealtimeGateway,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     @Inject(PAYMENT_PROVIDER) private readonly payments: PaymentProvider,
+    @Inject(BOOKINGS_QUEUE) private readonly queue: Queue<BookingsJobData>,
   ) {}
 
   async create(
@@ -88,7 +119,7 @@ export class BookingsService {
     const bookingId = randomUUID();
 
     // Atomic claim: SET NX GET returns the previously stored bookingId if the
-    // key already exists, so 10 parallel identical requests elect one winner.
+    // key already exists, so N parallel identical requests elect one winner.
     const existingId = (await this.redis.call(
       'SET',
       idemKey,
@@ -102,15 +133,27 @@ export class BookingsService {
 
     try {
       if (input.kind === 'assigned') {
-        return await this.createAssigned(user, input.seatId, input.eventId, bookingId, meta, input.timeToCompleteMs);
+        return await this.createAssigned(user, input, bookingId, meta);
       }
-      return await this.createGeneral(user, input.quantity, input.eventId, bookingId, meta, input.timeToCompleteMs);
+      const { booking, remaining } = await this.runGeneralTransaction(
+        user,
+        input.quantity,
+        input.eventId,
+        bookingId,
+        meta,
+        input.timeToCompleteMs,
+      );
+      this.gateway.emitCapacityUpdated(input.eventId, remaining);
+      await this.enqueueConfirmation(booking.id, user.email);
+      return booking;
     } catch (err) {
       if (err instanceof PaymentDeclinedError) {
         // The transaction rolled back (seat/capacity untouched, no transaction
         // row); persist the outcome so the idempotency key resolves.
-        const failed = await this.prisma.booking.create({
-          data: {
+        const failed = await this.prisma.booking.upsert({
+          where: { id: bookingId },
+          update: { status: 'FAILED', failReason: err.failureCode },
+          create: {
             id: bookingId,
             userId: user.id,
             eventId: input.eventId,
@@ -130,60 +173,164 @@ export class BookingsService {
 
   private async createAssigned(
     user: AuthenticatedUser,
+    input: Extract<CreateBookingInput, { kind: 'assigned' }>,
+    bookingId: string,
+    meta: BookingRequestMeta,
+  ): Promise<BookingDto> {
+    // Layer 1: fail-fast per-seat lock. A held lock means someone is booking
+    // this seat right now → Path B: enqueue and answer "pending" immediately.
+    const lock = await this.locks.acquireSeatLock(input.seatId);
+    if (!lock) return this.enqueueBooking(user, input, bookingId, meta);
+
+    let booking: BookingDto;
+    try {
+      booking = await this.runAssignedTransaction(
+        user,
+        input.seatId,
+        input.eventId,
+        bookingId,
+        meta,
+        input.timeToCompleteMs,
+      );
+    } finally {
+      await this.locks.release(lock);
+    }
+    this.gateway.emitSeatUpdated(input.eventId, input.seatId, 'BOOKED');
+    await this.enqueueConfirmation(booking.id, user.email);
+    return booking;
+  }
+
+  /** Path B (ARCHITECTURE.md §2): pending row first, then the job — the
+   * client always has something to poll. */
+  private async enqueueBooking(
+    user: AuthenticatedUser,
+    input: Extract<CreateBookingInput, { kind: 'assigned' }>,
+    bookingId: string,
+    meta: BookingRequestMeta,
+  ): Promise<BookingDto> {
+    const booking = await this.prisma.booking.create({
+      data: {
+        id: bookingId,
+        userId: user.id,
+        eventId: input.eventId,
+        seatId: input.seatId,
+        quantity: 1,
+        status: 'PENDING',
+      },
+    });
+    const jobData: ProcessBookingJobData = { bookingId, user, input, meta };
+    await this.queue.add(PROCESS_BOOKING_JOB, jobData, { ...JOB_OPTIONS, jobId: bookingId });
+    return toBookingDto(booking);
+  }
+
+  /** Executed by the BullMQ worker — same transaction as the direct path. */
+  async processQueuedBooking(data: ProcessBookingJobData): Promise<void> {
+    const current = await this.prisma.booking.findUnique({ where: { id: data.bookingId } });
+    if (!current || current.status !== 'PENDING') return; // already resolved
+
+    if (data.input.kind !== 'assigned') {
+      // only the assigned path ever enqueues
+      await this.failBooking(data.bookingId, data.user.id, 'INVALID_JOB');
+      return;
+    }
+
+    const lock = await this.locks.acquireSeatLock(data.input.seatId);
+    if (!lock) throw new SeatLockBusyError(); // retryable → BullMQ backoff
+
+    let booking: BookingDto;
+    try {
+      booking = await this.runAssignedTransaction(
+        data.user,
+        data.input.seatId,
+        data.input.eventId,
+        data.bookingId,
+        data.meta,
+        data.input.timeToCompleteMs,
+      );
+    } catch (err) {
+      if (err instanceof PaymentDeclinedError) {
+        await this.failBooking(data.bookingId, data.user.id, err.failureCode);
+        return;
+      }
+      if (err instanceof TRPCError && TERMINAL_BUSINESS_ERRORS.has(err.message)) {
+        await this.failBooking(data.bookingId, data.user.id, err.message);
+        return;
+      }
+      throw err; // transient (DB hiccup, …) → BullMQ retries
+    } finally {
+      await this.locks.release(lock);
+    }
+
+    this.gateway.emitSeatUpdated(data.input.eventId, data.input.seatId, 'BOOKED');
+    this.gateway.emitBookingStatus(data.user.id, { bookingId: booking.id, status: 'CONFIRMED' });
+    await this.enqueueConfirmation(booking.id, data.user.email);
+  }
+
+  /** Terminal failure: PENDING → FAILED (capacity/seat untouched — the
+   * transaction never committed), pushed to the user's room. */
+  async failBooking(bookingId: string, userId: string, reason: string): Promise<void> {
+    const { count } = await this.prisma.booking.updateMany({
+      where: { id: bookingId, status: 'PENDING' },
+      data: { status: 'FAILED', failReason: reason },
+    });
+    if (count === 1) {
+      this.gateway.emitBookingStatus(userId, { bookingId, status: 'FAILED', failReason: reason });
+    }
+  }
+
+  private async enqueueConfirmation(bookingId: string, email: string): Promise<void> {
+    await this.queue.add(SEND_CONFIRMATION_JOB, { bookingId, email }, JOB_OPTIONS);
+  }
+
+  private async runAssignedTransaction(
+    user: AuthenticatedUser,
     seatId: string,
     eventId: string,
     bookingId: string,
     meta: BookingRequestMeta,
     timeToCompleteMs?: number,
   ): Promise<BookingDto> {
-    // Layer 1: fail-fast per-seat lock. A held lock means someone is booking
-    // this seat right now — answer immediately (Phase 4 enqueues instead).
-    const lock = await this.locks.acquireSeatLock(seatId);
-    if (!lock) throw conflict('SEAT_TAKEN');
+    return this.prisma.$transaction(async (tx) => {
+      const seat = await tx.seat.findUnique({ where: { id: seatId } });
+      if (!seat || seat.eventId !== eventId) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Seat not found' });
+      }
+      await this.assertOnSale(tx, eventId);
+      if (seat.status !== 'AVAILABLE') throw conflict('SEAT_TAKEN');
 
-    try {
-      return await this.prisma.$transaction(async (tx) => {
-        const seat = await tx.seat.findUnique({ where: { id: seatId } });
-        if (!seat || seat.eventId !== eventId) {
-          throw new TRPCError({ code: 'NOT_FOUND', message: 'Seat not found' });
-        }
-        await this.assertOnSale(tx, eventId);
-        if (seat.status !== 'AVAILABLE') throw conflict('SEAT_TAKEN');
+      // Layers 2+3: optimistic version check and status condition in one
+      // guarded UPDATE — holds even if the seat lock expired or was stolen.
+      const updated = await tx.$executeRaw`
+        UPDATE "Seat" SET "status" = 'BOOKED', "version" = "version" + 1
+        WHERE "id" = ${seatId} AND "status" = 'AVAILABLE' AND "version" = ${seat.version}`;
+      if (updated === 0) throw conflict('SEAT_TAKEN');
 
-        // Layers 2+3: optimistic version check and status condition in one
-        // guarded UPDATE — holds even if the Redlock expired or was stolen.
-        const updated = await tx.$executeRaw`
-          UPDATE "Seat" SET "status" = 'BOOKED', "version" = "version" + 1
-          WHERE "id" = ${seatId} AND "status" = 'AVAILABLE' AND "version" = ${seat.version}`;
-        if (updated === 0) throw conflict('SEAT_TAKEN');
-
-        const booking = await tx.booking.create({
-          data: {
-            id: bookingId,
-            userId: user.id,
-            eventId,
-            seatId,
-            quantity: 1,
-            status: 'CONFIRMED',
-            confirmedAt: new Date(),
-          },
-        });
-        await this.chargeAndRecord(tx, user, booking, seat.priceCents, meta, timeToCompleteMs);
-        return toBookingDto(booking);
-      }, TX_OPTIONS);
-    } finally {
-      await this.locks.release(lock);
-    }
+      const confirmed = { status: 'CONFIRMED' as const, confirmedAt: new Date() };
+      const booking = await tx.booking.upsert({
+        where: { id: bookingId },
+        update: confirmed, // queued path: over the PENDING row
+        create: {
+          id: bookingId,
+          userId: user.id,
+          eventId,
+          seatId,
+          quantity: 1,
+          ...confirmed,
+        },
+      });
+      await this.chargeAndRecord(tx, user, booking, seat.priceCents, meta, timeToCompleteMs);
+      return toBookingDto(booking);
+    }, TX_OPTIONS);
   }
 
-  private async createGeneral(
+  private async runGeneralTransaction(
     user: AuthenticatedUser,
     quantity: number,
     eventId: string,
     bookingId: string,
     meta: BookingRequestMeta,
     timeToCompleteMs?: number,
-  ): Promise<BookingDto> {
+  ): Promise<{ booking: BookingDto; remaining: number }> {
     // No lock: the conditional decrement + Postgres row locking serialize
     // concurrent decrements safely (ARCHITECTURE.md §2.4).
     return this.prisma.$transaction(async (tx) => {
@@ -192,20 +339,18 @@ export class BookingsService {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'Not a general-admission event' });
       }
 
-      const updated = await tx.$executeRaw`
+      const rows = await tx.$queryRaw<{ remainingCapacity: number }[]>`
         UPDATE "Event" SET "remainingCapacity" = "remainingCapacity" - ${quantity}
-        WHERE "id" = ${eventId} AND "remainingCapacity" >= ${quantity}`;
-      if (updated === 0) throw conflict('SOLD_OUT');
+        WHERE "id" = ${eventId} AND "remainingCapacity" >= ${quantity}
+        RETURNING "remainingCapacity"`;
+      const remaining = rows[0]?.remainingCapacity;
+      if (remaining === undefined) throw conflict('SOLD_OUT');
 
-      const booking = await tx.booking.create({
-        data: {
-          id: bookingId,
-          userId: user.id,
-          eventId,
-          quantity,
-          status: 'CONFIRMED',
-          confirmedAt: new Date(),
-        },
+      const confirmed = { status: 'CONFIRMED' as const, confirmedAt: new Date() };
+      const booking = await tx.booking.upsert({
+        where: { id: bookingId },
+        update: confirmed,
+        create: { id: bookingId, userId: user.id, eventId, quantity, ...confirmed },
       });
       await this.chargeAndRecord(
         tx,
@@ -215,7 +360,7 @@ export class BookingsService {
         meta,
         timeToCompleteMs,
       );
-      return toBookingDto(booking);
+      return { booking: toBookingDto(booking), remaining };
     }, TX_OPTIONS);
   }
 

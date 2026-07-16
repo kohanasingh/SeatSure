@@ -6,6 +6,7 @@ import {
   EVENTS_QUEUE_NAME,
   FLIP_ON_SALE_JOB,
   FlipOnSaleJobData,
+  bullPrefix,
   createBullConnection,
 } from '../queue/events-queue.module';
 import { EventsService } from './events.service';
@@ -31,7 +32,7 @@ export class OnSaleWorker implements OnModuleInit, OnApplicationShutdown {
     this.worker = new Worker<FlipOnSaleJobData>(
       EVENTS_QUEUE_NAME,
       (job) => this.process(job),
-      { connection: createBullConnection(this.config) },
+      { connection: createBullConnection(this.config), prefix: bullPrefix(this.config) },
     );
     this.worker.on('failed', (job, err) => {
       this.logger.error(`Job ${job?.name} ${job?.id} failed: ${err.message}`);

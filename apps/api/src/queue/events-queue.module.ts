@@ -19,13 +19,21 @@ export interface FlipOnSaleJobData {
 export const createBullConnection = (config: ConfigService): Redis =>
   new Redis(config.getOrThrow<string>('REDIS_URL'), { maxRetriesPerRequest: null });
 
+// Queue-key namespace. The e2e suite sets BULLMQ_PREFIX so its in-process
+// workers never race the dev server's workers over the same Redis keys.
+export const bullPrefix = (config: ConfigService): string =>
+  config.get<string>('BULLMQ_PREFIX') ?? 'bull';
+
 @Global()
 @Module({
   providers: [
     {
       provide: EVENTS_QUEUE,
       useFactory: (config: ConfigService): Queue<FlipOnSaleJobData> =>
-        new Queue(EVENTS_QUEUE_NAME, { connection: createBullConnection(config) }),
+        new Queue(EVENTS_QUEUE_NAME, {
+          connection: createBullConnection(config),
+          prefix: bullPrefix(config),
+        }),
       inject: [ConfigService],
     },
   ],

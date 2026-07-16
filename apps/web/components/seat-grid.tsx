@@ -1,7 +1,11 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { useEffect, useMemo, useState } from 'react';
+import { useAuth } from '../lib/auth-context';
 import { formatPrice } from '../lib/format';
+import { getSocket } from '../lib/socket';
 
 export interface SeatInfo {
   id: string;
@@ -13,8 +17,27 @@ export interface SeatInfo {
 /** "A12" → row "A" (for grouping into visual rows). */
 const rowOf = (seatNumber: string): string => /^[A-Z]+/.exec(seatNumber)?.[0] ?? '?';
 
-export function SeatGrid({ seats }: { seats: SeatInfo[] }) {
+export function SeatGrid({ eventId, seats: initial }: { eventId: string; seats: SeatInfo[] }) {
+  const router = useRouter();
+  const { user } = useAuth();
+  const [seats, setSeats] = useState(initial);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  // Live availability (ARCHITECTURE.md §6): join the event room and flip
+  // seats as seat-updated pushes arrive. Sockets are downstream-only.
+  useEffect(() => {
+    const socket = getSocket();
+    const onSeatUpdated = ({ seatId, status }: { seatId: string; status: SeatInfo['status'] }) => {
+      setSeats((prev) => prev.map((s) => (s.id === seatId ? { ...s, status } : s)));
+      setSelectedId((sel) => (sel === seatId && status === 'BOOKED' ? null : sel));
+    };
+    socket.emit('join-event', eventId);
+    socket.on('seat-updated', onSeatUpdated);
+    return () => {
+      socket.emit('leave-event', eventId);
+      socket.off('seat-updated', onSeatUpdated);
+    };
+  }, [eventId]);
 
   const rows = useMemo(() => {
     const grouped = new Map<string, SeatInfo[]>();
@@ -83,14 +106,26 @@ export function SeatGrid({ seats }: { seats: SeatInfo[] }) {
             <span className="text-gray-600">Select a seat</span>
           )}
         </p>
-        <button
-          type="button"
-          disabled
-          title="Booking arrives in Phase 3"
-          className="rounded-md bg-gray-900 px-4 py-2 text-sm font-medium text-white opacity-50"
-        >
-          Book seat
-        </button>
+        {user ? (
+          <button
+            type="button"
+            disabled={!selected}
+            onClick={() =>
+              selected &&
+              router.push(`/checkout?eventId=${eventId}&seatId=${selected.id}`)
+            }
+            className="rounded-md bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700 disabled:opacity-50"
+          >
+            Book seat
+          </button>
+        ) : (
+          <Link
+            href="/login"
+            className="rounded-md bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700"
+          >
+            Log in to book
+          </Link>
+        )}
       </div>
     </div>
   );

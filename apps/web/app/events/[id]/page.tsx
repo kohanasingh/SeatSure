@@ -39,9 +39,10 @@ export default async function EventDetailPage({ params }: { params: Promise<{ id
       ) : null}
 
       {seats ? (
-        <SeatGrid seats={seats} />
+        <SeatGrid eventId={event.id} seats={seats} />
       ) : (
         <QuantityStepper
+          eventId={event.id}
           priceCents={event.gaPriceCents ?? 0}
           remaining={event.remainingCapacity ?? 0}
         />

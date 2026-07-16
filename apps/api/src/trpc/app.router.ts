@@ -8,6 +8,7 @@ import {
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { BookingsService } from '../bookings/bookings.service';
+import { QueueStatsService } from '../bookings/queue-stats.service';
 import { EventsAdminService } from '../events/events-admin.service';
 import { EventsService } from '../events/events.service';
 import { protectedProcedure, publicProcedure, roleProcedure, router } from './trpc';
@@ -16,6 +17,7 @@ export interface RouterDeps {
   events: EventsService;
   admin: EventsAdminService;
   bookings: BookingsService;
+  queueStats: QueueStatsService;
 }
 
 const organizerProcedure = roleProcedure('ORGANIZER', 'ADMIN');
@@ -63,6 +65,7 @@ export const createAppRouter = (deps: RouterDeps) =>
       updateEvent: organizerProcedure
         .input(updateEventSchema)
         .mutation(({ input, ctx }) => deps.admin.updateEvent(input, ctx.user)),
+      queueStats: roleProcedure('ADMIN').query(() => deps.queueStats.stats()),
     }),
   });
 

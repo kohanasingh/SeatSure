@@ -104,3 +104,30 @@ choice, note it here, continue.
   transport; the input schema is the natural carrier.
 - **Booking rate limit (10/15min/user) deferred to Phase 5** where BUILD_PHASES.md lists
   it under hardening.
+
+## Phase 4
+
+- **The queued path returns HTTP 200 with `status: PENDING`**, not a literal 202: tRPC
+  does not expose per-procedure status codes. The response body carries the spec's
+  `{ bookingId, status: 'pending' }` semantics; clients branch on the status field.
+- **Concurrency test 1 updated for Path B semantics**: lock losers now enqueue instead of
+  failing fast, so "99 SEAT_TAKEN" became "99 rejected" — immediate SEAT_TAKEN or PENDING
+  that terminally FAILs (`SEAT_TAKEN`, or `RETRIES_EXHAUSTED` when three lock-contended
+  attempts all bounced). The invariant that matters is unchanged and still asserted:
+  exactly one CONFIRMED booking, ever.
+- **`BULLMQ_PREFIX` env** namespaces all BullMQ keys. The e2e suite sets `bull-e2e` so its
+  in-process workers never race a running dev server's workers over the same Redis —
+  without it, a dev worker could steal a test job and emit socket events on the wrong
+  server.
+- **Checkout is two routes**: `/checkout?eventId&seatId|qty` hosts the mock payment form
+  (payment runs inside `bookings.create` in v1, so the form must precede the call; the
+  form's mount-to-submit time is the `timeToCompleteMs` fraud signal), then
+  `router.replace` to the spec's `/checkout/[bookingId]` which resolves pending →
+  confirmed via the booking-status socket push with a 2s `bookings.getStatus` poll as
+  fallback.
+- **Socket auth callback re-reads the in-memory token per connection attempt**; login/
+  logout forces a reconnect so the server-side `user:<id>` room membership always matches
+  the session. Gateway CORS reflects the request origin for now — pinned to WEB_ORIGIN in
+  Phase 5 hardening.
+- **`send-confirmation` jobs keep `removeOnComplete: {count: 1000}`** so
+  `admin.queueStats` can compute avgMs from recent completed jobs.

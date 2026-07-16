@@ -24,6 +24,8 @@ export default defineConfig({
     env: {
       // keep the limiter code path active but out of the way of the suite
       RATE_LIMIT_AUTH_MAX: '10000',
+      // isolate test queues from any running dev server sharing this Redis
+      BULLMQ_PREFIX: 'bull-e2e',
     },
   },
 });

@@ -131,7 +131,7 @@ describe('Bookings concurrency (e2e)', () => {
     return seat!;
   };
 
-  it('1. 100 parallel bookings for the SAME seat → exactly 1 CONFIRMED, 99 SEAT_TAKEN', async () => {
+  it('1. 100 parallel bookings for the SAME seat → exactly 1 CONFIRMED, 99 rejected', { timeout: 60_000 }, async () => {
     const seat = await seatByNumber('A1');
 
     const results = await Promise.all(
@@ -140,10 +140,24 @@ describe('Bookings concurrency (e2e)', () => {
       ),
     );
 
+    // Phase 4 semantics: losers either fail fast (SEAT_TAKEN once the seat is
+    // committed) or fall onto the queue path as PENDING — never CONFIRMED.
     const confirmed = results.filter((r) => r.booking?.status === 'CONFIRMED');
     const seatTaken = results.filter((r) => r.errorMessage === 'SEAT_TAKEN');
+    const pending = results.filter((r) => r.booking?.status === 'PENDING');
     expect(confirmed).toHaveLength(1);
-    expect(seatTaken).toHaveLength(99);
+    expect(seatTaken.length + pending.length).toBe(99);
+
+    // every queued attempt must terminally FAIL (seat already sold)
+    await expect
+      .poll(
+        () => prisma.booking.count({ where: { seatId: seat.id, status: 'PENDING' } }),
+        { timeout: 45_000, interval: 500 },
+      )
+      .toBe(0);
+    const failed = await prisma.booking.findMany({ where: { seatId: seat.id, status: 'FAILED' } });
+    expect(failed).toHaveLength(pending.length);
+    expect(failed.every((b) => ['SEAT_TAKEN', 'RETRIES_EXHAUSTED'].includes(b.failReason ?? ''))).toBe(true);
 
     // ground truth in the DB: one confirmed booking, seat BOOKED, txn recorded
     const dbConfirmed = await prisma.booking.count({
