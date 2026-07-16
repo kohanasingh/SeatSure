@@ -2,8 +2,17 @@ import { TRPCError, initTRPC } from '@trpc/server';
 import { Role } from '@prisma/client';
 import { AuthenticatedUser } from '../auth/types';
 
+export interface RequestMeta {
+  idempotencyKey?: string;
+  ipAddress?: string;
+  userAgent?: string;
+  acceptLanguage?: string;
+  screenHint?: string;
+}
+
 export interface TrpcContext {
   user: AuthenticatedUser | null;
+  meta: RequestMeta;
 }
 
 const t = initTRPC.context<TrpcContext>().create();

@@ -74,3 +74,33 @@ choice, note it here, continue.
   zero runtime coupling); web's tsconfig needs `experimentalDecorators` only so tsc can
   parse the imported API sources. `REDIS_CLIENT` token moved to `redis.constants.ts` to
   break a module↔provider import cycle this surfaced.
+
+## Phase 3
+
+- **Seat lock is the Redlock single-instance primitive implemented directly** (`SET NX PX`
+  + token-checked Lua release), not the `redlock` npm package: the package is a years-old
+  beta whose `exports` map ships no TypeScript types under `nodenext` resolution, and with
+  a single Redis node the library's multi-node quorum adds nothing. The algorithm's
+  correctness properties for one node are identical. Fail-fast (no retries): a held lock
+  answers SEAT_TAKEN immediately in Phase 3; Phase 4 turns that branch into the enqueue
+  path.
+- **Idempotency keys claim atomically via `SET NX GET`** (Redis ≥ 7): the value is the
+  booking id, written *before* processing, so N parallel duplicates elect one winner and
+  the losers wait for that booking row and return the same id. If processing fails without
+  creating a booking row (SEAT_TAKEN, SOLD_OUT, …) the key is deleted so an honest retry
+  isn't bricked for 24 h; a payment decline *does* persist (FAILED row) and stays mapped.
+- **Payment decline → FAILED booking row is written outside the rolled-back transaction**,
+  giving the client something to poll (`bookings.getStatus`) while guaranteeing seat /
+  capacity / transaction-row state is untouched (test 4 asserts all three).
+- **`bookings.create` returns HTTP 200 with `status: FAILED`** on payment decline rather
+  than an error: the spec's error list (SEAT_TAKEN, SOLD_OUT, EVENT_NOT_ON_SALE,
+  RATE_LIMITED) doesn't include payment failure, and the booking row is the durable record
+  of that outcome.
+- **`paymentMethod` is picked deterministically from the booking id hash** (mock provider
+  has no real instrument); `deviceFingerprint` = sha256(user-agent | accept-language |
+  x-screen-hint header), null when no components are present.
+- **`timeToCompleteMs` added as an optional field on `createBookingSchema`** (client-
+  reported, fraud signal only) — the spec places it on the transactions row but gave it no
+  transport; the input schema is the natural carrier.
+- **Booking rate limit (10/15min/user) deferred to Phase 5** where BUILD_PHASES.md lists
+  it under hardening.

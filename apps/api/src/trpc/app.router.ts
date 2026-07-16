@@ -1,6 +1,13 @@
-import { createEventSchema, eventQuerySchema, updateEventSchema } from '@seatsure/shared';
+import {
+  bookingQuerySchema,
+  createBookingSchema,
+  createEventSchema,
+  eventQuerySchema,
+  updateEventSchema,
+} from '@seatsure/shared';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
+import { BookingsService } from '../bookings/bookings.service';
 import { EventsAdminService } from '../events/events-admin.service';
 import { EventsService } from '../events/events.service';
 import { protectedProcedure, publicProcedure, roleProcedure, router } from './trpc';
@@ -8,6 +15,7 @@ import { protectedProcedure, publicProcedure, roleProcedure, router } from './tr
 export interface RouterDeps {
   events: EventsService;
   admin: EventsAdminService;
+  bookings: BookingsService;
 }
 
 const organizerProcedure = roleProcedure('ORGANIZER', 'ADMIN');
@@ -31,6 +39,21 @@ export const createAppRouter = (deps: RouterDeps) =>
       seatMap: publicProcedure
         .input(z.object({ eventId: z.string().uuid() }))
         .query(({ input }) => deps.events.seatMap(input.eventId)),
+    }),
+    bookings: router({
+      create: protectedProcedure.input(createBookingSchema).mutation(({ input, ctx }) => {
+        const idempotencyKey = ctx.meta.idempotencyKey;
+        if (!idempotencyKey) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'Idempotency-Key header required' });
+        }
+        return deps.bookings.create(ctx.user, input, { ...ctx.meta, idempotencyKey });
+      }),
+      getStatus: protectedProcedure
+        .input(z.object({ bookingId: z.string().uuid() }))
+        .query(({ input, ctx }) => deps.bookings.getStatus(ctx.user, input.bookingId)),
+      myBookings: protectedProcedure
+        .input(bookingQuerySchema)
+        .query(({ input, ctx }) => deps.bookings.myBookings(ctx.user, input)),
     }),
     admin: router({
       ping: organizerProcedure.query(() => ({ pong: true })),
