@@ -3,6 +3,7 @@
 import { Socket, io } from 'socket.io-client';
 import { getAccessToken } from './api';
 
+// empty string = same origin (prod: nginx proxies /socket.io/ to the API)
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 
 let socket: Socket | null = null;
@@ -13,9 +14,10 @@ let socket: Socket | null = null;
  * valid token joins the user:<id> room server-side.
  */
 export function getSocket(): Socket {
-  socket ??= io(API_URL, {
-    auth: (cb) => cb({ token: getAccessToken() ?? undefined }),
-  });
+  const options = {
+    auth: (cb: (data: object) => void) => cb({ token: getAccessToken() ?? undefined }),
+  };
+  socket ??= API_URL ? io(API_URL, options) : io(options);
   return socket;
 }
 

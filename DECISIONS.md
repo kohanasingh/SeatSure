@@ -157,3 +157,33 @@ choice, note it here, continue.
   evaluates before ConfigModule loads .env): in prod the variable exists in the real
   environment; the dev fallback equals the dev default. Load-test fixes (connection
   pool, advisory pre-read, VU jitter) are recorded in README's "what broke" section.
+
+## Phase 6
+
+- **"<200MB runtime images" read as compressed (registry) size**: the mandated
+  `node:20-alpine` base alone is ~122MB uncompressed, so an uncompressed target is
+  unreachable with the Nest+Prisma stack. Measured: api 78MB / web 64MB compressed
+  (api ~253MB, web ~176MB uncompressed). Pruned from the api bundle: the Prisma CLI
+  peer chain that pnpm `auto-install-peers` drags into `pnpm deploy --prod` output
+  (~100MB: engines, effect, typescript, fast-check) and `@prisma/client`'s
+  per-database WASM engine variants (~50MB; the native library engine is used).
+- **`npx prisma@^6 generate` is version-pinned in the Dockerfile** — bare `npx
+  prisma` resolves to Prisma 7, which rejects v6 schemas (`url` in datasource).
+- **Migrations run as a one-off compose service** built from the image's `builder`
+  stage (`migrate` → `service_completed_successfully` gate), never from the serving
+  container; on Cloud Run the same step becomes a release job. The prod compose file
+  sets `name: seatsure-prod` so `down` can never remove the dev stack's containers
+  (same service names, same directory — learned the hard way).
+- **Same-origin prod routing**: web is built with `NEXT_PUBLIC_API_URL=""` (relative
+  fetches through nginx), SSR uses runtime `API_URL_INTERNAL=http://api:3001`; nginx
+  proxies `/auth`, `/trpc`, `/webhooks`, `/socket.io` (websocket upgrade, no rate
+  limit on the socket path) to the API and everything else to Next.
+- **CI runs the Vitest e2e suites against service containers; Playwright is a local
+  acceptance step** (the CI acceptance list is lint → typecheck → test → build
+  images; the browser flow needs a running full stack and stays in the quickstart).
+- **Cloud Run flags matter for this architecture**: `min-instances 1` +
+  `no-cpu-throttling` because the BullMQ worker and delayed on-sale jobs execute
+  between requests; `session-affinity` for Socket.io.
+- **`RATE_LIMIT_AUTH_MAX` relaxed in the local `.env`** (1000): the web app's silent
+  refresh fires on every page load, so the strict 10/15min default trips during
+  normal dev and Playwright runs. `.env.example` keeps the strict default.

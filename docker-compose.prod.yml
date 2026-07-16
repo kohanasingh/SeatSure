@@ -1,0 +1,85 @@
+# Prod-like stack, entirely local:  docker compose -f docker-compose.prod.yml up --build
+# App is served through nginx on http://localhost (port 80).
+# Secrets below are local-dev placeholders — real deployments inject their own.
+
+# distinct project name: `down` on this file must never remove the dev
+# stack's postgres/redis (same service names, same directory)
+name: seatsure-prod
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: seatsure
+      POSTGRES_PASSWORD: seatsure
+      POSTGRES_DB: seatsure
+    volumes:
+      - pgdata_prod:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U seatsure -d seatsure']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  migrate:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      target: builder
+    command: sh -c "cd /repo/apps/api && npx prisma migrate deploy && npx tsx prisma/seed.ts"
+    environment:
+      DATABASE_URL: postgresql://seatsure:seatsure@postgres:5432/seatsure
+      SEED_ADMIN_EMAIL: admin@seatsure.dev
+      SEED_ADMIN_PASSWORD: admin12345
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://seatsure:seatsure@postgres:5432/seatsure?connection_limit=30&pool_timeout=30
+      REDIS_URL: redis://redis:6379
+      JWT_ACCESS_SECRET: prod-local-only-change-me-0123456789
+      WEB_ORIGIN: http://localhost
+      API_PORT: '3001'
+    depends_on:
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: '' # same origin — nginx routes API paths
+    environment:
+      API_URL_INTERNAL: http://api:3001 # SSR inside the compose network
+    depends_on:
+      - api
+
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - '80:80'
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - web
+      - api
+
+volumes:
+  pgdata_prod:

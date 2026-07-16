@@ -1,0 +1,12 @@
+**/node_modules
+**/dist
+**/.next
+**/tsconfig.tsbuildinfo
+.git
+.github
+load/loadtest-data.json
+*.log
+docker-compose*.yml
+nginx
+deploy
+**/.env

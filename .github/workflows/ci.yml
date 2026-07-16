@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: seatsure
+          POSTGRES_PASSWORD: seatsure
+          POSTGRES_DB: seatsure
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U seatsure -d seatsure"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://seatsure:seatsure@localhost:5432/seatsure?connection_limit=30
+      REDIS_URL: redis://localhost:6379
+      JWT_ACCESS_SECRET: ci-only-secret-0123456789abcdef
+      NODE_ENV: test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Migrate test database
+        run: pnpm --filter @seatsure/api db:generate && pnpm --filter @seatsure/api db:migrate
+
+      - name: Test (e2e vs real Postgres + Redis)
+        run: pnpm --filter @seatsure/api test
+
+      - name: Build images
+        run: |
+          docker build -f apps/api/Dockerfile -t seatsure-api .
+          docker build -f apps/web/Dockerfile -t seatsure-web .
+
+  # No-ops until the repo variable DEPLOY_ENABLED is set to 'true' and the
+  # referenced secrets exist — deploy artifacts are written, not yet live.
+  deploy:
+    needs: checks
+    if: github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Deploy API to Cloud Run
+        run: ./deploy/cloud-run.sh
+        env:
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Deploy web to Vercel
+        run: npx vercel deploy --prod --cwd apps/web --token "$VERCEL_TOKEN" --yes
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
