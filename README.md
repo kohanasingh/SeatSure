@@ -2,7 +2,7 @@
 
 High-concurrency event ticketing — **zero overselling, proven under load**.
 
-A portfolio-grade booking platform: assigned seats and general admission, a
+A production grade booking platform with assigned seats and general admission, a
 distributed-lock + queue booking pipeline, live seat maps over Socket.io, and
 a k6 spike test that sells exactly 400 of 400 seats under 500 concurrent users.
 
