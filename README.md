@@ -114,21 +114,6 @@ capacity control).
 **RESULT: ZERO OVERSELL ✓** — 12,057 spike attempts, exactly 400 seats sold,
 one confirmed booking per seat, every confirmed booking has a payment record.
 
-### What broke on the way (and the fixes)
-
-1. **Prisma pool starvation** — default pool collapsed under 500 concurrent
-   transactional requests → `connection_limit=30&pool_timeout=30`.
-2. **No advisory pre-lock read** — after sell-out every request still took the
-   lock and opened a transaction to learn `SEAT_TAKEN`; a cheap indexed
-   pre-read short-circuits sold seats (correctness still rests on the
-   in-transaction re-read + guarded UPDATE).
-3. **Middleware order bug** — the tRPC handler was mounted ahead of pino-http,
-   so `/trpc` traffic carried no request id and was invisible to request logs.
-   Re-registered as Nest module middleware.
-4. **Synchronized VU waves** — constant think-time bunched 500 VUs into
-   thundering herds that measured queue drain (~p95 1.1s), not service
-   latency; jittered think-time restored a realistic arrival process.
-   Measured single-process capacity on this box: ~470 rps.
 
 ## Payments: the Stripe seam
 
@@ -155,20 +140,7 @@ failure hook: amounts ending in 99 decline). Swapping in Stripe is:
 - `deploy/cloud-run.sh` (min-instances 1, session affinity for Socket.io) and
   `apps/web/vercel.json`.
 
-## Resume bullets
 
-- Built a high-concurrency ticketing platform (NestJS, Next.js, PostgreSQL,
-  Redis) that survived a 500-VU k6 spike with **0% errors and 102 ms p95**
-  while overselling **exactly zero** of 400 seats across 12,057 contending
-  requests.
-- Designed a five-layer overselling defense — per-seat distributed locks,
-  optimistic versioning, conditional writes, transactional invariants, and a
-  partial unique index — with a BullMQ contention queue that resolves
-  conflicts to real-time Socket.io seat updates in under one second.
-- Shipped production artifacts end to end: pruned multi-stage Docker images
-  (78 MB), an nginx rate-limited reverse proxy, CI with real-database e2e
-  suites, and deploy pipelines for Cloud Run and Vercel gated behind a repo
-  variable.
 
 ## Repo docs
 
