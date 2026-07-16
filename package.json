@@ -11,6 +11,7 @@
     "build": "pnpm -r build",
     "typecheck": "pnpm --filter @seatsure/shared build && pnpm -r typecheck",
     "lint": "eslint .",
+    "test": "pnpm --filter @seatsure/shared build && pnpm -r test",
     "format": "prettier --write .",
     "db:migrate": "pnpm --filter @seatsure/api db:migrate",
     "db:generate": "pnpm --filter @seatsure/api db:generate",
