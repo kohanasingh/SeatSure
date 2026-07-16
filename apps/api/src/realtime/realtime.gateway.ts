@@ -21,8 +21,9 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * same port as the HTTP server.
  */
 @WebSocketGateway({
-  // dev default; Phase 5 hardening pins this to WEB_ORIGIN
-  cors: { origin: true, credentials: true },
+  // decorator evaluates at import time (before ConfigModule); WEB_ORIGIN is
+  // present in the real environment in prod, and the fallback matches dev
+  cors: { origin: process.env.WEB_ORIGIN ?? 'http://localhost:3000', credentials: true },
 })
 export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection {
   private readonly logger = new Logger(RealtimeGateway.name);

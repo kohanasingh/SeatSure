@@ -131,3 +131,29 @@ choice, note it here, continue.
   Phase 5 hardening.
 - **`send-confirmation` jobs keep `removeOnComplete: {count: 1000}`** so
   `admin.queueStats` can compute avgMs from recent completed jobs.
+
+## Phase 5
+
+- **tRPC is registered as Nest module middleware** (TrpcModule `configure()`),
+  not `app.use('/trpc', …)` in bootstrap: raw pre-init mounting placed it ahead of
+  nestjs-pino's pino-http, so `/trpc` requests were never logged and carried no
+  request id (and post-init mounting lands behind Nest's 404 catch-all). Nest strips
+  the matched prefix exactly like an Express mount, which the tRPC adapter expects.
+- **Env config is Zod-validated at boot** (`validate:` on ConfigModule) — the last
+  unvalidated boundary from the "Zod at every boundary" audit; REST bodies (pipes),
+  tRPC inputs (procedure schemas), and socket messages (uuid checks) already were.
+- **Booking rate limit lives in BookingsService.create** (not a guard): tRPC
+  procedures don't pass through Nest guards. Shared sliding-window logic moved to
+  `RateLimitService`; the /auth guard consumes the same service. `RATE_LIMITED` maps
+  to tRPC `TOO_MANY_REQUESTS`.
+- **Load runs raise `RATE_LIMIT_BOOKING_MAX`**: 10 attempts/15min/user is a fraud
+  control; the k6 scenario deliberately exceeds it thousands of times per user.
+  Documented in README; the control stays on in normal operation and tests keep the
+  code path active.
+- **k6 treats 409 as an expected status** (`http.expectedStatuses(200, 409)`):
+  under deliberate contention SEAT_TAKEN is the correct answer, not a failure —
+  otherwise `http_req_failed<1%` is unsatisfiable by design.
+- **Gateway CORS reads `process.env.WEB_ORIGIN` at import time** (decorator
+  evaluates before ConfigModule loads .env): in prod the variable exists in the real
+  environment; the dev fallback equals the dev default. Load-test fixes (connection
+  pool, advisory pre-read, VU jitter) are recorded in README's "what broke" section.

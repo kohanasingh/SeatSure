@@ -4,6 +4,7 @@ import { AuthenticatedUser } from '../auth/types';
 
 export interface RequestMeta {
   idempotencyKey?: string;
+  requestId?: string;
   ipAddress?: string;
   userAgent?: string;
   acceptLanguage?: string;

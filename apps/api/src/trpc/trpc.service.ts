@@ -27,6 +27,8 @@ export class TrpcService {
   createContext(req: Request): TrpcContext {
     const meta = {
       idempotencyKey: req.headers['idempotency-key'] as string | undefined,
+      // pino-http's genReqId — correlates request logs with worker job logs
+      requestId: (req as Request & { id?: string | number }).id?.toString(),
       ipAddress: req.ip,
       userAgent: req.headers['user-agent'],
       acceptLanguage: req.headers['accept-language'],

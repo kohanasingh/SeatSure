@@ -18,3 +18,8 @@ test-results/
 
 # misc
 .DS_Store
+load/loadtest-data.json
+
+# local load-run artifacts
+api-load.log
+k6-*.log

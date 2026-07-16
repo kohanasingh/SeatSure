@@ -39,8 +39,12 @@ export class BookingsWorker implements OnModuleInit, OnApplicationShutdown {
     );
 
     this.worker.on('failed', (job, err) => {
+      const requestId =
+        job?.name === PROCESS_BOOKING_JOB
+          ? ((job.data as ProcessBookingJobData).meta.requestId ?? 'n/a')
+          : 'n/a';
       this.logger.warn(
-        `Job ${job?.name} ${job?.id} attempt ${job?.attemptsMade} failed: ${err.message}`,
+        `Job ${job?.name} ${job?.id} attempt ${job?.attemptsMade} failed (req=${requestId}): ${err.message}`,
       );
       // Terminal failure after all attempts → booking flips to FAILED;
       // capacity/seat untouched (the transaction never committed).
@@ -56,7 +60,15 @@ export class BookingsWorker implements OnModuleInit, OnApplicationShutdown {
 
   private async process(job: Job<BookingsJobData>): Promise<void> {
     if (job.name === PROCESS_BOOKING_JOB) {
-      await this.bookings.processQueuedBooking(job.data as ProcessBookingJobData);
+      const data = job.data as ProcessBookingJobData;
+      const startedAt = Date.now();
+      await this.bookings.processQueuedBooking(data);
+      // req= carries the originating HTTP request id (pino genReqId) into
+      // worker output — the §10 web → api → worker correlation
+      this.logger.log(
+        `processed booking ${data.bookingId} in ${Date.now() - startedAt}ms ` +
+          `(attempt ${job.attemptsMade + 1}, req=${data.meta.requestId ?? 'n/a'})`,
+      );
       return;
     }
     if (job.name === SEND_CONFIRMATION_JOB) {

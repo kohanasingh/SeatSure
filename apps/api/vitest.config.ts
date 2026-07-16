@@ -22,8 +22,9 @@ export default defineConfig({
     testTimeout: 30_000,
     fileParallelism: false, // suites share one Postgres/Redis
     env: {
-      // keep the limiter code path active but out of the way of the suite
+      // keep the limiter code paths active but out of the way of the suite
       RATE_LIMIT_AUTH_MAX: '10000',
+      RATE_LIMIT_BOOKING_MAX: '10000',
       // isolate test queues from any running dev server sharing this Redis
       BULLMQ_PREFIX: 'bull-e2e',
     },

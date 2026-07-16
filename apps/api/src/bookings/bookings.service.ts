@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { Inject, Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Booking, Prisma } from '@prisma/client';
 import { CreateBookingInput } from '@seatsure/shared';
 import { TRPCError } from '@trpc/server';
@@ -20,6 +21,7 @@ import {
   ProcessBookingJobData,
   SEND_CONFIRMATION_JOB,
 } from '../queue/bookings-queue.module';
+import { RateLimitService } from '../redis/rate-limit.service';
 import { REDIS_CLIENT } from '../redis/redis.constants';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { LockService } from './lock.service';
@@ -38,6 +40,7 @@ type Tx = Prisma.TransactionClient;
 
 export interface BookingRequestMeta {
   idempotencyKey: string;
+  requestId?: string;
   ipAddress?: string;
   userAgent?: string;
   acceptLanguage?: string;
@@ -105,6 +108,8 @@ export class BookingsService {
     private readonly prisma: PrismaService,
     private readonly locks: LockService,
     private readonly gateway: RealtimeGateway,
+    private readonly rateLimit: RateLimitService,
+    private readonly config: ConfigService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     @Inject(PAYMENT_PROVIDER) private readonly payments: PaymentProvider,
     @Inject(BOOKINGS_QUEUE) private readonly queue: Queue<BookingsJobData>,
@@ -115,6 +120,16 @@ export class BookingsService {
     input: CreateBookingInput,
     meta: BookingRequestMeta,
   ): Promise<BookingDto> {
+    // 10 booking attempts / 15 min / user (spec §3) — a fraud/abuse control
+    const allowed = await this.rateLimit.consume(
+      `rl:booking:${user.id}`,
+      Number(this.config.get('RATE_LIMIT_BOOKING_MAX') ?? 10),
+      15 * 60 * 1000,
+    );
+    if (!allowed) {
+      throw new TRPCError({ code: 'TOO_MANY_REQUESTS', message: 'RATE_LIMITED' });
+    }
+
     const idemKey = `idem:${user.id}:${meta.idempotencyKey}`;
     const bookingId = randomUUID();
 
@@ -177,6 +192,19 @@ export class BookingsService {
     bookingId: string,
     meta: BookingRequestMeta,
   ): Promise<BookingDto> {
+    // Advisory pre-lock read (ARCHITECTURE.md §3.1): a seat that is already
+    // BOOKED answers immediately — no lock, no transaction. Under a sold-out
+    // spike this short-circuits the vast majority of requests; correctness
+    // still rests on the in-transaction re-read + guarded UPDATE.
+    const preRead = await this.prisma.seat.findUnique({
+      where: { id: input.seatId },
+      select: { status: true, eventId: true },
+    });
+    if (!preRead || preRead.eventId !== input.eventId) {
+      throw new TRPCError({ code: 'NOT_FOUND', message: 'Seat not found' });
+    }
+    if (preRead.status !== 'AVAILABLE') throw conflict('SEAT_TAKEN');
+
     // Layer 1: fail-fast per-seat lock. A held lock means someone is booking
     // this seat right now → Path B: enqueue and answer "pending" immediately.
     const lock = await this.locks.acquireSeatLock(input.seatId);
