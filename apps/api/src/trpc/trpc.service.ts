@@ -2,12 +2,22 @@ import { Injectable } from '@nestjs/common';
 import * as trpcExpress from '@trpc/server/adapters/express';
 import type { Request, RequestHandler } from 'express';
 import { TokenService } from '../auth/token.service';
-import { appRouter } from './app.router';
+import { EventsAdminService } from '../events/events-admin.service';
+import { EventsService } from '../events/events.service';
+import { AppRouter, createAppRouter } from './app.router';
 import { TrpcContext } from './trpc';
 
 @Injectable()
 export class TrpcService {
-  constructor(private readonly tokens: TokenService) {}
+  private readonly router: AppRouter;
+
+  constructor(
+    private readonly tokens: TokenService,
+    events: EventsService,
+    admin: EventsAdminService,
+  ) {
+    this.router = createAppRouter({ events, admin });
+  }
 
   /** Same access JWT as the REST guards — read from the Authorization header. */
   createContext(req: Request): TrpcContext {
@@ -20,7 +30,7 @@ export class TrpcService {
 
   middleware(): RequestHandler {
     return trpcExpress.createExpressMiddleware({
-      router: appRouter,
+      router: this.router,
       createContext: ({ req }) => this.createContext(req),
     });
   }

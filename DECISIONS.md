@@ -51,3 +51,26 @@ choice, note it here, continue.
 - **Vitest uses swc via `unplugin-swc`** (`oxc: false`): the default transform cannot emit
   `emitDecoratorMetadata`, which NestJS DI needs. Same reason `pnpm dev` uses `nest start`
   rather than tsx.
+
+## Phase 2
+
+- **`events.list` cache is keyed per page** (`events:list:<limit>:<cursor>`), since the
+  spec's single "full event listing JSON" key doesn't compose with cursor pagination.
+  Busting deletes the whole `events:list:` prefix via SCAN (never KEYS).
+- **`events.list` returns all statuses, including DRAFT.** The acceptance scenario watches
+  a DRAFT event flip to ON_SALE "in the list"; the booking layer (Phase 3) enforces
+  ON_SALE, so listing drafts is harmless in this portfolio scope. A public/organizer list
+  split can come later if needed.
+- **Event DTOs serialize dates as ISO strings** so the Postgres path and the Redis-cache
+  path return byte-identical shapes (no tRPC transformer configured).
+- **`admin.updateEvent` edits only non-structural fields** (title, description, venue,
+  eventTime, onSaleAt) — seatingType/layout/capacity are immutable after creation, since
+  changing them would orphan or contradict generated seats. Organizers can only edit their
+  own events (ADMIN can edit any). Changing `onSaleAt` on a DRAFT reschedules the flip job.
+- **On-sale flip job**: BullMQ delayed job, `jobId = flip-on-sale-<eventId>` (BullMQ
+  forbids `:` in custom ids) so an event never has two pending flips; the worker's
+  `updateMany WHERE status='DRAFT'` guard makes duplicate/stale jobs no-ops.
+- **Web imports the tRPC router type via `@seatsure/api/trpc` package export** (type-only,
+  zero runtime coupling); web's tsconfig needs `experimentalDecorators` only so tsc can
+  parse the imported API sources. `REDIS_CLIENT` token moved to `redis.constants.ts` to
+  break a module↔provider import cycle this surfaced.

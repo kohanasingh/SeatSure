@@ -7,6 +7,9 @@
     "jsx": "preserve",
     "noEmit": true,
     "isolatedModules": true,
+    // the type-only AppRouter import pulls @seatsure/api sources (Nest decorators)
+    // into this typecheck
+    "experimentalDecorators": true,
     "incremental": true,
     "plugins": [{ "name": "next" }]
   },

@@ -28,6 +28,18 @@ export const createEventSchema = z.discriminatedUnion('seatingType', [
 ]);
 export type CreateEventInput = z.infer<typeof createEventSchema>;
 
+// Partial edits to non-structural fields; seatingType/layout/capacity are
+// immutable after creation (changing them would orphan or contradict seats).
+export const updateEventSchema = z.object({
+  id: z.string().uuid(),
+  title: z.string().trim().min(1).max(200).optional(),
+  description: z.string().max(5000).optional(),
+  venue: z.string().max(200).optional(),
+  eventTime: z.coerce.date().optional(),
+  onSaleAt: z.coerce.date().optional(),
+});
+export type UpdateEventInput = z.infer<typeof updateEventSchema>;
+
 export const eventQuerySchema = z.object({
   cursor: z.string().uuid().optional(),
   limit: z.number().int().min(1).max(50).default(20),
