@@ -131,6 +131,23 @@ describe('Bookings concurrency (e2e)', () => {
     return seat!;
   };
 
+  // CI runners are slower/CPU-constrained than a local dev machine — poll for
+  // the actual state transition instead of assuming a fixed delay is enough
+  // to reach it (a bigger constant just moves the flake threshold).
+  const pollUntil = async (
+    predicate: () => boolean | Promise<boolean>,
+    { timeoutMs = 5_000, intervalMs = 100 } = {},
+  ): Promise<void> => {
+    const startedAt = Date.now();
+    for (;;) {
+      if (await predicate()) return;
+      if (Date.now() - startedAt >= timeoutMs) {
+        throw new Error(`pollUntil: condition not met within ${timeoutMs}ms`);
+      }
+      await sleep(intervalMs);
+    }
+  };
+
   it('1. 100 parallel bookings for the SAME seat → exactly 1 CONFIRMED, 99 rejected', { timeout: 60_000 }, async () => {
     const seat = await seatByNumber('A1');
 
@@ -232,7 +249,9 @@ describe('Bookings concurrency (e2e)', () => {
     process.env.SIMULATE_PAYMENT_LATENCY_MS = '1500';
     try {
       const first = book({ kind: 'assigned', eventId: assignedEventId, seatId: seat.id });
-      await sleep(500); // first request has the lock and is mid-transaction
+      // wait for the actual lock to appear rather than assuming a fixed
+      // delay is enough for the first request to reach the payment step
+      await pollUntil(async () => (await redis.exists(seatLockKey(seat.id))) === 1);
 
       await redis.del(seatLockKey(seat.id)); // kill the lock out from under it
 

@@ -206,3 +206,28 @@ choice, note it here, continue.
   as defense-in-depth parity for any BullMQ-touching script run directly in that
   shell — `vitest.config.ts`'s `test.env` already forces `bull-e2e` for the suite
   process itself regardless of the outer shell env.
+- **Fixed-delay waits replaced with poll/ack patterns in the e2e suites**, since a
+  constant tuned against a fast local machine isn't guaranteed sufficient on a
+  slower/CPU-constrained CI runner (a bigger constant just moves the flake
+  threshold, it doesn't remove it). `realtime.e2e-spec.ts`'s `joinEvent` used to
+  `emit('join-event', id)` then sleep 150ms and hope; `join-event` now returns an
+  ack (`onJoinEvent` in `realtime.gateway.ts` returns `boolean`) and the test
+  helper resolves on that ack instead. `bookings.e2e-spec.ts` concurrency test 5
+  used to sleep 500ms and assume the first request had reached the payment step;
+  it now polls Redis for the actual lock key to exist. Concurrency test 1's
+  PENDING-drain check already used `expect.poll` — left as-is, no fix needed.
+- **Real bug found while replacing test 5's fixed sleep, not the hypothesized CI-speed
+  flake**: polling for the lock key timed out on every run — `SIMULATE_PAYMENT_LATENCY_MS`
+  set by the test at runtime was never reaching `MockPaymentProvider`. `ConfigService.get()`
+  resolves against the Zod-validated boot-time snapshot (`getFromValidatedEnv`, checked
+  before `getFromProcessEnv` — confirmed in `@nestjs/config`'s source) added by the Phase 5
+  "env is Zod-validated at boot" change, so a `process.env` mutation after boot silently
+  never took effect. The old 500ms-sleep version of this test had been passing anyway
+  since Phase 5 by accident: without the intended delay, the first booking completes and
+  releases the lock before the sleep even ends, so `redis.del` on the (already-gone) lock
+  is a no-op and the second booking hits the ordinary `SEAT_TAKEN` path — same pass/fail
+  shape as the intended stolen-lock race, but never actually exercising layers 2+3.
+  Fixed by reading `process.env.SIMULATE_PAYMENT_LATENCY_MS` directly in
+  `mock-payment.provider.ts` instead of through `ConfigService`, matching the file's
+  existing (until now incorrect) comment that this value is meant to be runtime-mutable
+  by tests.
