@@ -187,3 +187,22 @@ choice, note it here, continue.
 - **`RATE_LIMIT_AUTH_MAX` relaxed in the local `.env`** (1000): the web app's silent
   refresh fires on every page load, so the strict 10/15min default trips during
   normal dev and Playwright runs. `.env.example` keeps the strict default.
+
+## Phase 7 (deployment readiness hardening)
+
+- **BullMQ cross-spec-file leak, audited and confirmed already closed.** The Phase 4
+  entry above flagged the risk: a leftover `Worker` from one e2e spec file's Nest
+  app could stay subscribed to the shared `bull-e2e` queue after that file's suite
+  ends and pick up a job enqueued by the next file, whose gateway has since torn
+  down — an emit on a closed Socket.io server. Audit: `BookingsWorker` and
+  `OnSaleWorker` both implement `onApplicationShutdown` and call `worker.close()`
+  (`bookings.worker.ts`, `on-sale.worker.ts`); every e2e spec's `afterAll` calls
+  `app.close()`; Nest's `close()` unconditionally runs `callDestroyHook()` →
+  `callShutdownHook()` regardless of `enableShutdownHooks()` (verified against the
+  installed `@nestjs/core` — that flag only wires OS signal listeners, not `close()`
+  itself); `vitest.config.ts` has `fileParallelism: false`, so one file's `afterAll`
+  always completes before the next file's `beforeAll` starts. No missing hook, no
+  fix needed there. Added `BULLMQ_PREFIX: bull-ci` to `ci.yml`'s env block anyway,
+  as defense-in-depth parity for any BullMQ-touching script run directly in that
+  shell — `vitest.config.ts`'s `test.env` already forces `bull-e2e` for the suite
+  process itself regardless of the outer shell env.
