@@ -231,3 +231,20 @@ choice, note it here, continue.
   `mock-payment.provider.ts` instead of through `ConfigService`, matching the file's
   existing (until now incorrect) comment that this value is meant to be runtime-mutable
   by tests.
+- **Redis-down surfaces as 503, not a generic 500.** `maxRetriesPerRequest: 2`
+  (`redis.module.ts`) already makes ioredis fail fast instead of hanging, but nothing
+  translated that thrown error into a meaningful response. Added `isRedisUnavailableError`
+  (`redis/redis-errors.util.ts`) — true for `MaxRetriesPerRequestError`/`AbortError` or a
+  connection-level errno (`ECONNREFUSED`/`ECONNRESET`/`ETIMEDOUT`/`EPIPE`), false for
+  application-level Redis errors (which should still surface as-is). Wired into
+  `LockService.acquireSeatLock`/`release`, `RateLimitService.consume`, and the bookings
+  idempotency `SET NX GET` claim — all rethrow `TRPCError({code:'SERVICE_UNAVAILABLE'})`.
+  `RateLimitService` is shared by a tRPC call site (`BookingsService.create`) and a REST
+  guard (`AuthRateLimitGuard`); rather than adding a second transport-specific error type,
+  `AuthRateLimitGuard` catches the `TRPCError` `RateLimitService` throws (it's just a plain
+  `Error` subclass with a `.code`, nothing tRPC-transport-specific about catching it) and
+  re-throws `ServiceUnavailableException`, since a raw `TRPCError` thrown from a Nest guard
+  wouldn't otherwise be translated into an HTTP response. Covered by
+  `test/redis-unavailable.e2e-spec.ts`: two tests, each booting an isolated Nest app with
+  `REDIS_CLIENT` overridden to a client pointed at an address nothing listens on, asserting
+  `bookings.create` and `/auth/register` both return 503.

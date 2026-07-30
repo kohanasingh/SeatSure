@@ -22,6 +22,7 @@ import {
   SEND_CONFIRMATION_JOB,
 } from '../queue/bookings-queue.module';
 import { RateLimitService } from '../redis/rate-limit.service';
+import { isRedisUnavailableError } from '../redis/redis-errors.util';
 import { REDIS_CLIENT } from '../redis/redis.constants';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { LockService } from './lock.service';
@@ -135,15 +136,23 @@ export class BookingsService {
 
     // Atomic claim: SET NX GET returns the previously stored bookingId if the
     // key already exists, so N parallel identical requests elect one winner.
-    const existingId = (await this.redis.call(
-      'SET',
-      idemKey,
-      bookingId,
-      'EX',
-      IDEM_TTL_SECONDS,
-      'NX',
-      'GET',
-    )) as string | null;
+    let existingId: string | null;
+    try {
+      existingId = (await this.redis.call(
+        'SET',
+        idemKey,
+        bookingId,
+        'EX',
+        IDEM_TTL_SECONDS,
+        'NX',
+        'GET',
+      )) as string | null;
+    } catch (err) {
+      if (isRedisUnavailableError(err)) {
+        throw new TRPCError({ code: 'SERVICE_UNAVAILABLE', message: 'Try again shortly' });
+      }
+      throw err;
+    }
     if (existingId !== null) return this.awaitExistingBooking(existingId);
 
     try {

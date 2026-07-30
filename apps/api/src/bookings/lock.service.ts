@@ -1,7 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
+import { TRPCError } from '@trpc/server';
 import Redis from 'ioredis';
+import { isRedisUnavailableError } from '../redis/redis-errors.util';
 import { REDIS_CLIENT } from '../redis/redis.constants';
+
+const redisUnavailable = (): never => {
+  throw new TRPCError({ code: 'SERVICE_UNAVAILABLE', message: 'Try again shortly' });
+};
 
 export const SEAT_LOCK_TTL_MS = 5_000;
 export const seatLockKey = (seatId: string): string => `lock:seat:${seatId}`;
@@ -35,11 +41,21 @@ export class LockService {
   /** No retries — a busy seat is answered immediately. Null = not acquired. */
   async acquireSeatLock(seatId: string): Promise<SeatLock | null> {
     const lock: SeatLock = { key: seatLockKey(seatId), token: randomUUID() };
-    const ok = await this.redis.set(lock.key, lock.token, 'PX', SEAT_LOCK_TTL_MS, 'NX');
-    return ok === 'OK' ? lock : null;
+    try {
+      const ok = await this.redis.set(lock.key, lock.token, 'PX', SEAT_LOCK_TTL_MS, 'NX');
+      return ok === 'OK' ? lock : null;
+    } catch (err) {
+      if (isRedisUnavailableError(err)) redisUnavailable();
+      throw err;
+    }
   }
 
   async release(lock: SeatLock): Promise<void> {
-    await this.redis.eval(RELEASE_SCRIPT, 1, lock.key, lock.token);
+    try {
+      await this.redis.eval(RELEASE_SCRIPT, 1, lock.key, lock.token);
+    } catch (err) {
+      if (isRedisUnavailableError(err)) redisUnavailable();
+      throw err;
+    }
   }
 }
