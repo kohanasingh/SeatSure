@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { Agent as HttpAgent } from 'node:http';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
@@ -16,6 +17,14 @@ import type Redis from 'ioredis';
 // against real Postgres + Redis. Must pass 3 consecutive runs.
 
 const RUN = randomUUID().slice(0, 8);
+
+// superagent defaults to `agent: false` (a fresh one-off socket per request,
+// see superagent/lib/node/index.js) — fine for a handful of sequential calls,
+// but tests 1 and 2 fire 100-200 truly parallel requests, and that many
+// simultaneous fresh sockets was enough to exhaust fds/ephemeral ports on
+// GitHub's constrained runners (observed as ECONNRESET, run 29529500313).
+// A shared keep-alive agent pools and reuses connections instead.
+const keepAliveAgent = new HttpAgent({ keepAlive: true, maxSockets: 256 });
 
 interface BookingBody {
   id: string;
@@ -86,6 +95,7 @@ describe('Bookings concurrency (e2e)', () => {
   ): Promise<BookingResponse> => {
     const res = await request(server)
       .post('/trpc/bookings.create')
+      .agent(keepAliveAgent)
       .set('Authorization', `Bearer ${token}`)
       .set('Idempotency-Key', idempotencyKey)
       .send(body);
@@ -122,6 +132,7 @@ describe('Bookings concurrency (e2e)', () => {
     await prisma.seat.deleteMany({ where: { eventId: { in: eventIds } } });
     await prisma.event.deleteMany({ where: { id: { in: eventIds } } });
     await prisma.user.deleteMany({ where: { email: { endsWith: '@bookings-e2e.test' } } });
+    keepAliveAgent.destroy();
     await app.close();
   });
 

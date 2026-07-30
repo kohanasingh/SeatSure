@@ -248,3 +248,11 @@ choice, note it here, continue.
   `test/redis-unavailable.e2e-spec.ts`: two tests, each booting an isolated Nest app with
   `REDIS_CLIENT` overridden to a client pointed at an address nothing listens on, asserting
   `bookings.create` and `/auth/register` both return 503.
+- **Ported forward a real, evidenced fix from the earlier `ci-fix` branch that
+  `fix/deployment-readiness` (branched off `main`) didn't have**: tests 1 and 2 fire
+  100-200 truly parallel requests, and supertest/superagent defaults to `agent: false`
+  (a fresh one-off socket per request), which was enough to exhaust fds/ephemeral ports
+  on GitHub's constrained runners — observed as ECONNRESET in an actual CI run
+  (29529500313), not a hypothesized failure. Fix: a shared keep-alive `http.Agent`
+  (`maxSockets: 256`) reused across `bookings.e2e-spec.ts`'s `book()` calls, destroyed in
+  `afterAll`.
