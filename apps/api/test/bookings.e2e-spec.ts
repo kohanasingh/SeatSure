@@ -240,7 +240,7 @@ describe('Bookings concurrency (e2e)', () => {
     expect(stored.status).toBe('FAILED');
   });
 
-  it('5. lock killed mid-flight → version check still prevents double booking', async () => {
+  it('5. lock killed mid-flight → status-based conditional update still prevents double booking', async () => {
     const seat = await seatByNumber('Z2');
     const second = await createUser('second');
 
@@ -256,7 +256,7 @@ describe('Bookings concurrency (e2e)', () => {
       await redis.del(seatLockKey(seat.id)); // kill the lock out from under it
 
       process.env.SIMULATE_PAYMENT_LATENCY_MS = '0';
-      // second request now acquires the lock freely — layers 2+3 must stop it
+      // second request now acquires the lock freely — layer 2 must stop it
       const second_result = await book(
         { kind: 'assigned', eventId: assignedEventId, seatId: seat.id },
         { token: second.token },

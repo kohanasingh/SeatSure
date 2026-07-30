@@ -50,7 +50,7 @@ Why worker in-process for v1: simpler local dev and deploy. The worker is regist
 
 One Prisma `$transaction` containing, in order:
 1. Re-read seat status / remaining capacity **inside** the transaction (the pre-lock read is advisory only).
-2. ASSIGNED: `UPDATE seats SET status='booked', version=version+1 WHERE id=$1 AND status='available' AND version=$2` — 0 rows affected → throw `SeatConflictError` (transaction rolls back).
+2. ASSIGNED: `UPDATE seats SET status='booked' WHERE id=$1 AND status='available'` — 0 rows affected → throw `SeatConflictError` (transaction rolls back).
    GENERAL: `UPDATE events SET remaining_capacity = remaining_capacity - $qty WHERE id=$1 AND remaining_capacity >= $qty` — 0 rows → `SoldOutError`.
 3. Insert `bookings` row (status `confirmed`).
 4. Call `PaymentProvider.charge()` — **mock, synchronous, in-process** for v1, so it can live inside the transaction window. NOTE for Stripe later: real payment moves OUTSIDE the transaction into a saga (book-pending → charge → confirm/release). The `PaymentProvider` interface and booking service are structured so this refactor only touches the booking service, nothing else.
@@ -63,12 +63,18 @@ If anything throws, everything rolls back. There is no state where a seat is boo
 | Layer | Mechanism | Catches |
 |---|---|---|
 | 1 | Redlock per-seat lock | Serializes the hot path, avoids stampede on Postgres |
-| 2 | Optimistic version check in the UPDATE | Lock expiry edge case (process paused > TTL) |
-| 3 | Conditional WHERE clause (status/capacity) | Any write that slipped past 1 and 2 |
-| 4 | DB transaction isolation | Partial writes |
-| 5 | Unique constraint: one confirmed booking per seat (partial unique index on bookings(seat_id) WHERE status='confirmed') | Absolute last line — the DB physically cannot store a double booking |
+| 2 | Status/capacity conditional UPDATE (compare-and-swap on `status` for ASSIGNED, `remaining_capacity` for GENERAL) | Lock expiry edge case (process paused > TTL) *and* any write that slipped past layer 1 — one guarded write covers both |
+| 3 | DB transaction isolation | Partial writes |
+| 4 | Unique constraint: one confirmed booking per seat (partial unique index on bookings(seat_id) WHERE status='confirmed') | Absolute last line — the DB physically cannot store a double booking |
 
-Layer 5 is mandatory. The k6 proof is "confirmed bookings == unique seats sold", and the schema itself should make violation impossible.
+Layer 4 is mandatory. The k6 proof is "confirmed bookings == unique seats sold", and the schema itself should make violation impossible.
+
+*(Phase 7: `Seat.version` removed — it was redundant with the `status` guard above.
+`status` only ever has two states and only ever transitions AVAILABLE → BOOKED in the
+booking path, so the same `WHERE status='available'` condition that layer 2 already
+needed gives the identical compare-and-swap guarantee a version counter would; no other
+mutable field on `Seat` needed general-purpose optimistic concurrency control
+(`priceCents`/`seatNumber` are immutable post-creation). See DECISIONS.md.)*
 
 ## 5. Caching strategy
 

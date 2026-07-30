@@ -91,7 +91,6 @@ model Seat {
   seatNumber String // e.g. "A12"
   priceCents Int
   status     SeatStatus @default(AVAILABLE)
-  version    Int        @default(0) // optimistic locking
   bookings   Booking[]
 
   @@unique([eventId, seatNumber])
