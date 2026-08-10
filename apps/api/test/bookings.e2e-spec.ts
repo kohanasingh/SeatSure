@@ -116,6 +116,9 @@ describe('Bookings concurrency (e2e)', () => {
 
     // TEMP DIAGNOSTIC (CI-fix): instrument the raw server socket lifecycle to
     // find the real cause of the intermittent ECONNRESET on tests 1 & 2.
+    server.on('error', (err: NodeJS.ErrnoException) => {
+      console.error(`[DIAG] server error event: ${err.message} code=${(err as any).code}`);
+    });
     server.on('clientError', (err: NodeJS.ErrnoException, socket: import('node:net').Socket) => {
       console.error(
         `[DIAG] server clientError: ${err.message} code=${err.code} destroyed=${socket.destroyed}`,
@@ -132,6 +135,27 @@ describe('Bookings concurrency (e2e)', () => {
         if (hadError) console.error(`[DIAG] server-side socket #${n} closed with error`);
       });
     });
+
+    // Root-cause candidate: supertest's per-request `serverAddress()` does
+    // `if (!app.address()) app.listen(0)` (node_modules/supertest/lib/test.js:63)
+    // with no synchronization. Tests 1/2 fire 100-200 request(server) calls
+    // synchronously in the same tick (Promise.all(Array.from(...))), and
+    // `server.listen(0)` is async — `address()` stays null until the
+    // 'listening' event fires, so many of those calls could each see a null
+    // address and call `.listen(0)` again on the same already-listening
+    // server before the first bind completes. Listening explicitly once,
+    // here, before any test runs, means every request's `serverAddress()`
+    // check always finds a real address and never re-invokes listen().
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(0, () => {
+        server.removeListener('error', reject);
+        resolve();
+      });
+    });
+    console.error(
+      `[DIAG] explicit listen done, address=${JSON.stringify(server.address())}`,
+    );
 
     const user = await createUser('main');
     userId = user.id;
