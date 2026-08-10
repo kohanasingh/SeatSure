@@ -127,7 +127,7 @@ failure hook: amounts ending in 99 decline). Swapping in Stripe is:
    the only file that changes; `/webhooks/payments` is already reserved and
    the idempotency-key plumbing already exists.
 
-## Deploy artifacts (written in Phase 6 — not yet live)
+## Deploy artifacts (not yet live)
 
 - `apps/api/Dockerfile`, `apps/web/Dockerfile` — multi-stage node:20-alpine,
   non-root, pruned (api 78 MB / web 64 MB compressed).
@@ -139,13 +139,3 @@ failure hook: amounts ending in 99 decline). Swapping in Stripe is:
   `DEPLOY_ENABLED` repo variable.
 - `deploy/cloud-run.sh` (min-instances 1, session affinity for Socket.io) and
   `apps/web/vercel.json`.
-
-
-
-## Repo docs
-
-- `ARCHITECTURE.md` — system design (booking paths, defense layers, caching,
-  realtime model)
-- `API_AND_DATA_SPEC.md` — schema, endpoints, payment interface
-- `BUILD_PHASES.md` — the phase plan this repo was built against
-- `DECISIONS.md` — every ambiguity resolved during the build, with reasoning
