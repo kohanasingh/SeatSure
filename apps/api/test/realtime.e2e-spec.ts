@@ -67,10 +67,18 @@ describe('Realtime (e2e)', () => {
     return socket;
   };
 
-  const joinEvent = async (socket: ClientSocket, id: string): Promise<void> => {
-    socket.emit('join-event', id);
-    await new Promise((r) => setTimeout(r, 150)); // let the join settle server-side
-  };
+  // Waits for the server's ack rather than a fixed delay — CI runners are
+  // slower/CPU-constrained than a local dev machine, so a constant sleep
+  // long enough locally isn't guaranteed to be long enough there.
+  const joinEvent = (socket: ClientSocket, id: string): Promise<void> =>
+    new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`join-event ack timed out for ${id}`)), 5_000);
+      socket.emit('join-event', id, (ok: boolean) => {
+        clearTimeout(timer);
+        if (ok) resolve();
+        else reject(new Error(`join-event rejected for ${id}`));
+      });
+    });
 
   const book = (body: Record<string, unknown>, token = userToken) =>
     request(baseUrl)

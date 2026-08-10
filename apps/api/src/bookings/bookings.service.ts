@@ -22,6 +22,7 @@ import {
   SEND_CONFIRMATION_JOB,
 } from '../queue/bookings-queue.module';
 import { RateLimitService } from '../redis/rate-limit.service';
+import { isRedisUnavailableError } from '../redis/redis-errors.util';
 import { REDIS_CLIENT } from '../redis/redis.constants';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { LockService } from './lock.service';
@@ -92,7 +93,7 @@ const TERMINAL_BUSINESS_ERRORS = new Set(['SEAT_TAKEN', 'SOLD_OUT', 'EVENT_NOT_O
 
 /**
  * The atomic booking core (ARCHITECTURE.md §3). One Prisma transaction:
- * re-read state → guarded UPDATE (version check / conditional decrement) →
+ * re-read state → guarded UPDATE (status CAS / conditional decrement) →
  * booking row → mock charge → transactions row. Anything throws, everything
  * rolls back — no state where a seat is booked without a booking, or a
  * booking exists without a transaction record.
@@ -135,15 +136,23 @@ export class BookingsService {
 
     // Atomic claim: SET NX GET returns the previously stored bookingId if the
     // key already exists, so N parallel identical requests elect one winner.
-    const existingId = (await this.redis.call(
-      'SET',
-      idemKey,
-      bookingId,
-      'EX',
-      IDEM_TTL_SECONDS,
-      'NX',
-      'GET',
-    )) as string | null;
+    let existingId: string | null;
+    try {
+      existingId = (await this.redis.call(
+        'SET',
+        idemKey,
+        bookingId,
+        'EX',
+        IDEM_TTL_SECONDS,
+        'NX',
+        'GET',
+      )) as string | null;
+    } catch (err) {
+      if (isRedisUnavailableError(err)) {
+        throw new TRPCError({ code: 'SERVICE_UNAVAILABLE', message: 'Try again shortly' });
+      }
+      throw err;
+    }
     if (existingId !== null) return this.awaitExistingBooking(existingId);
 
     try {
@@ -326,11 +335,12 @@ export class BookingsService {
       await this.assertOnSale(tx, eventId);
       if (seat.status !== 'AVAILABLE') throw conflict('SEAT_TAKEN');
 
-      // Layers 2+3: optimistic version check and status condition in one
-      // guarded UPDATE — holds even if the seat lock expired or was stolen.
+      // Layer 2: status-based conditional update — a compare-and-swap on the
+      // one mutable field that matters, holds even if the seat lock expired
+      // or was stolen (DECISIONS.md).
       const updated = await tx.$executeRaw`
-        UPDATE "Seat" SET "status" = 'BOOKED', "version" = "version" + 1
-        WHERE "id" = ${seatId} AND "status" = 'AVAILABLE' AND "version" = ${seat.version}`;
+        UPDATE "Seat" SET "status" = 'BOOKED'
+        WHERE "id" = ${seatId} AND "status" = 'AVAILABLE'`;
       if (updated === 0) throw conflict('SEAT_TAKEN');
 
       const confirmed = { status: 'CONFIRMED' as const, confirmedAt: new Date() };

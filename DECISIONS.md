@@ -187,3 +187,72 @@ choice, note it here, continue.
 - **`RATE_LIMIT_AUTH_MAX` relaxed in the local `.env`** (1000): the web app's silent
   refresh fires on every page load, so the strict 10/15min default trips during
   normal dev and Playwright runs. `.env.example` keeps the strict default.
+
+## Phase 7 (deployment readiness hardening)
+
+- **BullMQ cross-spec-file leak, audited and confirmed already closed.** The Phase 4
+  entry above flagged the risk: a leftover `Worker` from one e2e spec file's Nest
+  app could stay subscribed to the shared `bull-e2e` queue after that file's suite
+  ends and pick up a job enqueued by the next file, whose gateway has since torn
+  down — an emit on a closed Socket.io server. Audit: `BookingsWorker` and
+  `OnSaleWorker` both implement `onApplicationShutdown` and call `worker.close()`
+  (`bookings.worker.ts`, `on-sale.worker.ts`); every e2e spec's `afterAll` calls
+  `app.close()`; Nest's `close()` unconditionally runs `callDestroyHook()` →
+  `callShutdownHook()` regardless of `enableShutdownHooks()` (verified against the
+  installed `@nestjs/core` — that flag only wires OS signal listeners, not `close()`
+  itself); `vitest.config.ts` has `fileParallelism: false`, so one file's `afterAll`
+  always completes before the next file's `beforeAll` starts. No missing hook, no
+  fix needed there. Added `BULLMQ_PREFIX: bull-ci` to `ci.yml`'s env block anyway,
+  as defense-in-depth parity for any BullMQ-touching script run directly in that
+  shell — `vitest.config.ts`'s `test.env` already forces `bull-e2e` for the suite
+  process itself regardless of the outer shell env.
+- **Fixed-delay waits replaced with poll/ack patterns in the e2e suites**, since a
+  constant tuned against a fast local machine isn't guaranteed sufficient on a
+  slower/CPU-constrained CI runner (a bigger constant just moves the flake
+  threshold, it doesn't remove it). `realtime.e2e-spec.ts`'s `joinEvent` used to
+  `emit('join-event', id)` then sleep 150ms and hope; `join-event` now returns an
+  ack (`onJoinEvent` in `realtime.gateway.ts` returns `boolean`) and the test
+  helper resolves on that ack instead. `bookings.e2e-spec.ts` concurrency test 5
+  used to sleep 500ms and assume the first request had reached the payment step;
+  it now polls Redis for the actual lock key to exist. Concurrency test 1's
+  PENDING-drain check already used `expect.poll` — left as-is, no fix needed.
+- **Real bug found while replacing test 5's fixed sleep, not the hypothesized CI-speed
+  flake**: polling for the lock key timed out on every run — `SIMULATE_PAYMENT_LATENCY_MS`
+  set by the test at runtime was never reaching `MockPaymentProvider`. `ConfigService.get()`
+  resolves against the Zod-validated boot-time snapshot (`getFromValidatedEnv`, checked
+  before `getFromProcessEnv` — confirmed in `@nestjs/config`'s source) added by the Phase 5
+  "env is Zod-validated at boot" change, so a `process.env` mutation after boot silently
+  never took effect. The old 500ms-sleep version of this test had been passing anyway
+  since Phase 5 by accident: without the intended delay, the first booking completes and
+  releases the lock before the sleep even ends, so `redis.del` on the (already-gone) lock
+  is a no-op and the second booking hits the ordinary `SEAT_TAKEN` path — same pass/fail
+  shape as the intended stolen-lock race, but never actually exercising layers 2+3.
+  Fixed by reading `process.env.SIMULATE_PAYMENT_LATENCY_MS` directly in
+  `mock-payment.provider.ts` instead of through `ConfigService`, matching the file's
+  existing (until now incorrect) comment that this value is meant to be runtime-mutable
+  by tests.
+- **Redis-down surfaces as 503, not a generic 500.** `maxRetriesPerRequest: 2`
+  (`redis.module.ts`) already makes ioredis fail fast instead of hanging, but nothing
+  translated that thrown error into a meaningful response. Added `isRedisUnavailableError`
+  (`redis/redis-errors.util.ts`) — true for `MaxRetriesPerRequestError`/`AbortError` or a
+  connection-level errno (`ECONNREFUSED`/`ECONNRESET`/`ETIMEDOUT`/`EPIPE`), false for
+  application-level Redis errors (which should still surface as-is). Wired into
+  `LockService.acquireSeatLock`/`release`, `RateLimitService.consume`, and the bookings
+  idempotency `SET NX GET` claim — all rethrow `TRPCError({code:'SERVICE_UNAVAILABLE'})`.
+  `RateLimitService` is shared by a tRPC call site (`BookingsService.create`) and a REST
+  guard (`AuthRateLimitGuard`); rather than adding a second transport-specific error type,
+  `AuthRateLimitGuard` catches the `TRPCError` `RateLimitService` throws (it's just a plain
+  `Error` subclass with a `.code`, nothing tRPC-transport-specific about catching it) and
+  re-throws `ServiceUnavailableException`, since a raw `TRPCError` thrown from a Nest guard
+  wouldn't otherwise be translated into an HTTP response. Covered by
+  `test/redis-unavailable.e2e-spec.ts`: two tests, each booting an isolated Nest app with
+  `REDIS_CLIENT` overridden to a client pointed at an address nothing listens on, asserting
+  `bookings.create` and `/auth/register` both return 503.
+- **Ported forward a real, evidenced fix from the earlier `ci-fix` branch that
+  `fix/deployment-readiness` (branched off `main`) didn't have**: tests 1 and 2 fire
+  100-200 truly parallel requests, and supertest/superagent defaults to `agent: false`
+  (a fresh one-off socket per request), which was enough to exhaust fds/ephemeral ports
+  on GitHub's constrained runners — observed as ECONNRESET in an actual CI run
+  (29529500313), not a hypothesized failure. Fix: a shared keep-alive `http.Agent`
+  (`maxSockets: 256`) reused across `bookings.e2e-spec.ts`'s `book()` calls, destroyed in
+  `afterAll`.

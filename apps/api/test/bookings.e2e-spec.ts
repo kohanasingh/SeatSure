@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { Agent as HttpAgent } from 'node:http';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
@@ -16,6 +17,14 @@ import type Redis from 'ioredis';
 // against real Postgres + Redis. Must pass 3 consecutive runs.
 
 const RUN = randomUUID().slice(0, 8);
+
+// superagent defaults to `agent: false` (a fresh one-off socket per request,
+// see superagent/lib/node/index.js) — fine for a handful of sequential calls,
+// but tests 1 and 2 fire 100-200 truly parallel requests, and that many
+// simultaneous fresh sockets was enough to exhaust fds/ephemeral ports on
+// GitHub's constrained runners (observed as ECONNRESET, run 29529500313).
+// A shared keep-alive agent pools and reuses connections instead.
+const keepAliveAgent = new HttpAgent({ keepAlive: true, maxSockets: 256 });
 
 interface BookingBody {
   id: string;
@@ -86,6 +95,7 @@ describe('Bookings concurrency (e2e)', () => {
   ): Promise<BookingResponse> => {
     const res = await request(server)
       .post('/trpc/bookings.create')
+      .agent(keepAliveAgent)
       .set('Authorization', `Bearer ${token}`)
       .set('Idempotency-Key', idempotencyKey)
       .send(body);
@@ -103,6 +113,25 @@ describe('Bookings concurrency (e2e)', () => {
     prisma = app.get(PrismaService);
     redis = app.get(REDIS_CLIENT);
     server = app.getHttpServer();
+
+    // supertest's per-request `serverAddress()` does
+    // `if (!app.address()) app.listen(0)` (supertest/lib/test.js) with no
+    // synchronization. Tests 1/2 fire 100-200 request(server) calls
+    // synchronously in the same tick, and `server.listen(0)` is async —
+    // `address()` stays null until the 'listening' event fires, so many of
+    // those calls each saw a null address and called `.listen(0)` again on
+    // the same already-listening server before the first bind completed,
+    // surfacing as ECONNRESET on ~80% of the burst (run 31407886915).
+    // Listening explicitly once, here, before any test runs, means every
+    // request's `serverAddress()` check always finds a real address and
+    // never re-invokes listen().
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(0, () => {
+        server.removeListener('error', reject);
+        resolve();
+      });
+    });
 
     const user = await createUser('main');
     userId = user.id;
@@ -122,6 +151,7 @@ describe('Bookings concurrency (e2e)', () => {
     await prisma.seat.deleteMany({ where: { eventId: { in: eventIds } } });
     await prisma.event.deleteMany({ where: { id: { in: eventIds } } });
     await prisma.user.deleteMany({ where: { email: { endsWith: '@bookings-e2e.test' } } });
+    keepAliveAgent.destroy();
     await app.close();
   });
 
@@ -129,6 +159,23 @@ describe('Bookings concurrency (e2e)', () => {
     const seat = await prisma.seat.findFirst({ where: { eventId: assignedEventId, seatNumber } });
     expect(seat).not.toBeNull();
     return seat!;
+  };
+
+  // CI runners are slower/CPU-constrained than a local dev machine — poll for
+  // the actual state transition instead of assuming a fixed delay is enough
+  // to reach it (a bigger constant just moves the flake threshold).
+  const pollUntil = async (
+    predicate: () => boolean | Promise<boolean>,
+    { timeoutMs = 5_000, intervalMs = 100 } = {},
+  ): Promise<void> => {
+    const startedAt = Date.now();
+    for (;;) {
+      if (await predicate()) return;
+      if (Date.now() - startedAt >= timeoutMs) {
+        throw new Error(`pollUntil: condition not met within ${timeoutMs}ms`);
+      }
+      await sleep(intervalMs);
+    }
   };
 
   it('1. 100 parallel bookings for the SAME seat → exactly 1 CONFIRMED, 99 rejected', { timeout: 60_000 }, async () => {
@@ -223,7 +270,7 @@ describe('Bookings concurrency (e2e)', () => {
     expect(stored.status).toBe('FAILED');
   });
 
-  it('5. lock killed mid-flight → version check still prevents double booking', async () => {
+  it('5. lock killed mid-flight → status-based conditional update still prevents double booking', async () => {
     const seat = await seatByNumber('Z2');
     const second = await createUser('second');
 
@@ -232,12 +279,14 @@ describe('Bookings concurrency (e2e)', () => {
     process.env.SIMULATE_PAYMENT_LATENCY_MS = '1500';
     try {
       const first = book({ kind: 'assigned', eventId: assignedEventId, seatId: seat.id });
-      await sleep(500); // first request has the lock and is mid-transaction
+      // wait for the actual lock to appear rather than assuming a fixed
+      // delay is enough for the first request to reach the payment step
+      await pollUntil(async () => (await redis.exists(seatLockKey(seat.id))) === 1);
 
       await redis.del(seatLockKey(seat.id)); // kill the lock out from under it
 
       process.env.SIMULATE_PAYMENT_LATENCY_MS = '0';
-      // second request now acquires the lock freely — layers 2+3 must stop it
+      // second request now acquires the lock freely — layer 2 must stop it
       const second_result = await book(
         { kind: 'assigned', eventId: assignedEventId, seatId: seat.id },
         { token: second.token },

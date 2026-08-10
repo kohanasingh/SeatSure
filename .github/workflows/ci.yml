@@ -30,6 +30,9 @@ jobs:
       REDIS_URL: redis://localhost:6379
       JWT_ACCESS_SECRET: ci-only-secret-0123456789abcdef
       NODE_ENV: test
+      # vitest.config.ts's test.env already forces bull-e2e for the suite itself;
+      # this covers any other BullMQ-touching script run directly in this job's shell.
+      BULLMQ_PREFIX: bull-ci
 
     steps:
       - uses: actions/checkout@v4

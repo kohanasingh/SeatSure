@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
+import { TRPCError } from '@trpc/server';
 import Redis from 'ioredis';
+import { isRedisUnavailableError } from './redis-errors.util';
 import { REDIS_CLIENT } from './redis.constants';
 
 /**
@@ -16,14 +18,21 @@ export class RateLimitService {
   /** Records a hit and returns true when the key is within its limit. */
   async consume(key: string, max: number, windowMs: number): Promise<boolean> {
     const now = Date.now();
-    const [, , count] = await this.redis
-      .multi()
-      .zremrangebyscore(key, 0, now - windowMs)
-      .zadd(key, now, `${now}:${randomUUID()}`)
-      .zcard(key)
-      .pexpire(key, windowMs)
-      .exec()
-      .then((results) => (results ?? []).map(([, value]) => value));
-    return Number(count) <= max;
+    try {
+      const [, , count] = await this.redis
+        .multi()
+        .zremrangebyscore(key, 0, now - windowMs)
+        .zadd(key, now, `${now}:${randomUUID()}`)
+        .zcard(key)
+        .pexpire(key, windowMs)
+        .exec()
+        .then((results) => (results ?? []).map(([, value]) => value));
+      return Number(count) <= max;
+    } catch (err) {
+      if (isRedisUnavailableError(err)) {
+        throw new TRPCError({ code: 'SERVICE_UNAVAILABLE', message: 'Try again shortly' });
+      }
+      throw err;
+    }
   }
 }

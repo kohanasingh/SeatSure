@@ -52,11 +52,16 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection {
     if (userId) void socket.join(`user:${userId}`);
   }
 
+  // Returns a value so Nest sends it as the ack the client's emit() callback
+  // resolves on — lets callers know the join has actually landed
+  // server-side instead of guessing how long it takes.
   @SubscribeMessage('join-event')
-  onJoinEvent(@ConnectedSocket() socket: Socket, @MessageBody() eventId: unknown): void {
+  async onJoinEvent(@ConnectedSocket() socket: Socket, @MessageBody() eventId: unknown): Promise<boolean> {
     if (typeof eventId === 'string' && UUID_RE.test(eventId)) {
-      void socket.join(`event:${eventId}`);
+      await socket.join(`event:${eventId}`);
+      return true;
     }
+    return false;
   }
 
   @SubscribeMessage('leave-event')
