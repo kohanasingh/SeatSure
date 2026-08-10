@@ -114,38 +114,17 @@ describe('Bookings concurrency (e2e)', () => {
     redis = app.get(REDIS_CLIENT);
     server = app.getHttpServer();
 
-    // TEMP DIAGNOSTIC (CI-fix): instrument the raw server socket lifecycle to
-    // find the real cause of the intermittent ECONNRESET on tests 1 & 2.
-    server.on('error', (err: NodeJS.ErrnoException) => {
-      console.error(`[DIAG] server error event: ${err.message} code=${err.code}`);
-    });
-    server.on('clientError', (err: NodeJS.ErrnoException, socket: import('node:net').Socket) => {
-      console.error(
-        `[DIAG] server clientError: ${err.message} code=${err.code} destroyed=${socket.destroyed}`,
-      );
-    });
-    let connCount = 0;
-    server.on('connection', (socket: import('node:net').Socket) => {
-      connCount += 1;
-      const n = connCount;
-      socket.on('error', (err: NodeJS.ErrnoException) => {
-        console.error(`[DIAG] server-side socket #${n} error: ${err.message} code=${err.code}`);
-      });
-      socket.on('close', (hadError: boolean) => {
-        if (hadError) console.error(`[DIAG] server-side socket #${n} closed with error`);
-      });
-    });
-
-    // Root-cause candidate: supertest's per-request `serverAddress()` does
-    // `if (!app.address()) app.listen(0)` (node_modules/supertest/lib/test.js:63)
-    // with no synchronization. Tests 1/2 fire 100-200 request(server) calls
-    // synchronously in the same tick (Promise.all(Array.from(...))), and
-    // `server.listen(0)` is async — `address()` stays null until the
-    // 'listening' event fires, so many of those calls could each see a null
-    // address and call `.listen(0)` again on the same already-listening
-    // server before the first bind completes. Listening explicitly once,
-    // here, before any test runs, means every request's `serverAddress()`
-    // check always finds a real address and never re-invokes listen().
+    // supertest's per-request `serverAddress()` does
+    // `if (!app.address()) app.listen(0)` (supertest/lib/test.js) with no
+    // synchronization. Tests 1/2 fire 100-200 request(server) calls
+    // synchronously in the same tick, and `server.listen(0)` is async —
+    // `address()` stays null until the 'listening' event fires, so many of
+    // those calls each saw a null address and called `.listen(0)` again on
+    // the same already-listening server before the first bind completed,
+    // surfacing as ECONNRESET on ~80% of the burst (run 31407886915).
+    // Listening explicitly once, here, before any test runs, means every
+    // request's `serverAddress()` check always finds a real address and
+    // never re-invokes listen().
     await new Promise<void>((resolve, reject) => {
       server.once('error', reject);
       server.listen(0, () => {
@@ -153,9 +132,6 @@ describe('Bookings concurrency (e2e)', () => {
         resolve();
       });
     });
-    console.error(
-      `[DIAG] explicit listen done, address=${JSON.stringify(server.address())}`,
-    );
 
     const user = await createUser('main');
     userId = user.id;
@@ -205,29 +181,10 @@ describe('Bookings concurrency (e2e)', () => {
   it('1. 100 parallel bookings for the SAME seat → exactly 1 CONFIRMED, 99 rejected', { timeout: 60_000 }, async () => {
     const seat = await seatByNumber('A1');
 
-    // TEMP DIAGNOSTIC (CI-fix): allSettled instead of all — a single
-    // transport-level failure among 100 concurrent requests shouldn't hide
-    // the other 99 outcomes, which Promise.all's fail-fast behavior does.
-    const settled = await Promise.allSettled(
+    const results = await Promise.all(
       Array.from({ length: 100 }, () =>
         book({ kind: 'assigned', eventId: assignedEventId, seatId: seat.id }),
       ),
-    );
-    const rejected = settled.filter(
-      (s): s is PromiseRejectedResult => s.status === 'rejected',
-    );
-    if (rejected.length > 0) {
-      console.error(`[DIAG] test 1: ${rejected.length}/100 requests rejected`);
-      for (const r of rejected.slice(0, 10)) {
-        const e = r.reason as NodeJS.ErrnoException;
-        console.error(
-          `[DIAG] test 1 rejection: message=${e?.message} code=${e?.code} syscall=${e?.syscall} errno=${e?.errno}`,
-        );
-      }
-      throw new Error(`${rejected.length}/100 booking requests failed at the transport layer`);
-    }
-    const results = settled.map(
-      (s) => (s as PromiseFulfilledResult<BookingResponse>).value,
     );
 
     // Phase 4 semantics: losers either fail fast (SEAT_TAKEN once the seat is
@@ -263,25 +220,8 @@ describe('Bookings concurrency (e2e)', () => {
   it('2. 200 parallel GENERAL bookings vs capacity 50 → exactly 50 CONFIRMED, remaining 0, never negative', async () => {
     const eventId = await createGeneralEvent(50, 2_500);
 
-    // TEMP DIAGNOSTIC (CI-fix): see test 1's comment above.
-    const settled = await Promise.allSettled(
+    const results = await Promise.all(
       Array.from({ length: 200 }, () => book({ kind: 'general', eventId, quantity: 1 })),
-    );
-    const rejected = settled.filter(
-      (s): s is PromiseRejectedResult => s.status === 'rejected',
-    );
-    if (rejected.length > 0) {
-      console.error(`[DIAG] test 2: ${rejected.length}/200 requests rejected`);
-      for (const r of rejected.slice(0, 10)) {
-        const e = r.reason as NodeJS.ErrnoException;
-        console.error(
-          `[DIAG] test 2 rejection: message=${e?.message} code=${e?.code} syscall=${e?.syscall} errno=${e?.errno}`,
-        );
-      }
-      throw new Error(`${rejected.length}/200 booking requests failed at the transport layer`);
-    }
-    const results = settled.map(
-      (s) => (s as PromiseFulfilledResult<BookingResponse>).value,
     );
 
     const confirmed = results.filter((r) => r.booking?.status === 'CONFIRMED');
