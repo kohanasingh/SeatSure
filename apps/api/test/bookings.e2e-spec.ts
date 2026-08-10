@@ -117,7 +117,7 @@ describe('Bookings concurrency (e2e)', () => {
     // TEMP DIAGNOSTIC (CI-fix): instrument the raw server socket lifecycle to
     // find the real cause of the intermittent ECONNRESET on tests 1 & 2.
     server.on('error', (err: NodeJS.ErrnoException) => {
-      console.error(`[DIAG] server error event: ${err.message} code=${(err as any).code}`);
+      console.error(`[DIAG] server error event: ${err.message} code=${err.code}`);
     });
     server.on('clientError', (err: NodeJS.ErrnoException, socket: import('node:net').Socket) => {
       console.error(
