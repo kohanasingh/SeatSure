@@ -114,6 +114,25 @@ describe('Bookings concurrency (e2e)', () => {
     redis = app.get(REDIS_CLIENT);
     server = app.getHttpServer();
 
+    // TEMP DIAGNOSTIC (CI-fix): instrument the raw server socket lifecycle to
+    // find the real cause of the intermittent ECONNRESET on tests 1 & 2.
+    server.on('clientError', (err: NodeJS.ErrnoException, socket: import('node:net').Socket) => {
+      console.error(
+        `[DIAG] server clientError: ${err.message} code=${err.code} destroyed=${socket.destroyed}`,
+      );
+    });
+    let connCount = 0;
+    server.on('connection', (socket: import('node:net').Socket) => {
+      connCount += 1;
+      const n = connCount;
+      socket.on('error', (err: NodeJS.ErrnoException) => {
+        console.error(`[DIAG] server-side socket #${n} error: ${err.message} code=${err.code}`);
+      });
+      socket.on('close', (hadError: boolean) => {
+        if (hadError) console.error(`[DIAG] server-side socket #${n} closed with error`);
+      });
+    });
+
     const user = await createUser('main');
     userId = user.id;
     userToken = user.token;
@@ -162,10 +181,29 @@ describe('Bookings concurrency (e2e)', () => {
   it('1. 100 parallel bookings for the SAME seat → exactly 1 CONFIRMED, 99 rejected', { timeout: 60_000 }, async () => {
     const seat = await seatByNumber('A1');
 
-    const results = await Promise.all(
+    // TEMP DIAGNOSTIC (CI-fix): allSettled instead of all — a single
+    // transport-level failure among 100 concurrent requests shouldn't hide
+    // the other 99 outcomes, which Promise.all's fail-fast behavior does.
+    const settled = await Promise.allSettled(
       Array.from({ length: 100 }, () =>
         book({ kind: 'assigned', eventId: assignedEventId, seatId: seat.id }),
       ),
+    );
+    const rejected = settled.filter(
+      (s): s is PromiseRejectedResult => s.status === 'rejected',
+    );
+    if (rejected.length > 0) {
+      console.error(`[DIAG] test 1: ${rejected.length}/100 requests rejected`);
+      for (const r of rejected.slice(0, 10)) {
+        const e = r.reason as NodeJS.ErrnoException;
+        console.error(
+          `[DIAG] test 1 rejection: message=${e?.message} code=${e?.code} syscall=${e?.syscall} errno=${e?.errno}`,
+        );
+      }
+      throw new Error(`${rejected.length}/100 booking requests failed at the transport layer`);
+    }
+    const results = settled.map(
+      (s) => (s as PromiseFulfilledResult<BookingResponse>).value,
     );
 
     // Phase 4 semantics: losers either fail fast (SEAT_TAKEN once the seat is
@@ -201,8 +239,25 @@ describe('Bookings concurrency (e2e)', () => {
   it('2. 200 parallel GENERAL bookings vs capacity 50 → exactly 50 CONFIRMED, remaining 0, never negative', async () => {
     const eventId = await createGeneralEvent(50, 2_500);
 
-    const results = await Promise.all(
+    // TEMP DIAGNOSTIC (CI-fix): see test 1's comment above.
+    const settled = await Promise.allSettled(
       Array.from({ length: 200 }, () => book({ kind: 'general', eventId, quantity: 1 })),
+    );
+    const rejected = settled.filter(
+      (s): s is PromiseRejectedResult => s.status === 'rejected',
+    );
+    if (rejected.length > 0) {
+      console.error(`[DIAG] test 2: ${rejected.length}/200 requests rejected`);
+      for (const r of rejected.slice(0, 10)) {
+        const e = r.reason as NodeJS.ErrnoException;
+        console.error(
+          `[DIAG] test 2 rejection: message=${e?.message} code=${e?.code} syscall=${e?.syscall} errno=${e?.errno}`,
+        );
+      }
+      throw new Error(`${rejected.length}/200 booking requests failed at the transport layer`);
+    }
+    const results = settled.map(
+      (s) => (s as PromiseFulfilledResult<BookingResponse>).value,
     );
 
     const confirmed = results.filter((r) => r.booking?.status === 'CONFIRMED');
