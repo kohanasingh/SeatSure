@@ -23,3 +23,5 @@ load/loadtest-data.json
 # local load-run artifacts
 api-load.log
 k6-*.log
+.vercel
+.env*

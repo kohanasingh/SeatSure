@@ -6,6 +6,8 @@ A production grade booking platform with assigned seats and general admission, a
 distributed-lock + queue booking pipeline, live seat maps over Socket.io, and
 a k6 spike test that sells exactly 400 of 400 seats under 500 concurrent users.
 
+**Live:** https://seatsure-web.vercel.app
+
 ## Architecture
 
 ```mermaid
@@ -127,7 +129,10 @@ failure hook: amounts ending in 99 decline). Swapping in Stripe is:
    the only file that changes; `/webhooks/payments` is already reserved and
    the idempotency-key plumbing already exists.
 
-## Deploy artifacts (not yet live)
+## Deploy artifacts
+
+See [DEPLOYMENT.md](./DEPLOYMENT.md) for what's actually running in
+production. The repo also carries:
 
 - `apps/api/Dockerfile`, `apps/web/Dockerfile` — multi-stage node:20-alpine,
   non-root, pruned (api 78 MB / web 64 MB compressed).
