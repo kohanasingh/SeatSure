@@ -90,8 +90,11 @@ services:
     image: nginx:1.27-alpine
     ports:
       - '80:80'
+      - '443:443'
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./certbot-webroot:/var/www/certbot
+      - /etc/letsencrypt:/etc/letsencrypt:ro
     depends_on:
       - api
 
