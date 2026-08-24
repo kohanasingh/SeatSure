@@ -1,55 +1,34 @@
-import Link from 'next/link';
-import { formatDateTime, formatPrice } from '../lib/format';
+import { EventBrowser } from '../components/event-browser';
 import { trpc } from '../lib/trpc';
 
 // Redis (60s TTL) is the caching layer — Next must not add a static one on top.
 export const dynamic = 'force-dynamic';
 
-const statusStyles: Record<string, string> = {
-  ON_SALE: 'bg-green-100 text-green-800',
-  DRAFT: 'bg-yellow-100 text-yellow-800',
-  SOLD_OUT: 'bg-red-100 text-red-800',
-  ENDED: 'bg-gray-200 text-gray-600',
-};
-
 export default async function HomePage() {
   const { items } = await trpc.events.list.query({ limit: 20 });
 
   return (
-    <main className="mx-auto max-w-3xl p-6">
-      <h1 className="mb-6 text-3xl font-bold tracking-tight">Events</h1>
-      {items.length === 0 ? (
-        <p className="text-gray-600">No events yet.</p>
-      ) : (
-        <ul className="space-y-4">
-          {items.map((event) => (
-            <li key={event.id}>
-              <Link
-                href={`/events/${event.id}`}
-                className="block rounded-lg border border-gray-200 p-4 transition-colors hover:border-gray-400"
-              >
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <h2 className="text-lg font-semibold">{event.title}</h2>
-                    {event.venue && <p className="text-sm text-gray-600">{event.venue}</p>}
-                    <p className="mt-1 text-sm text-gray-600">{formatDateTime(event.eventTime)}</p>
-                  </div>
-                  <div className="flex flex-col items-end gap-2">
-                    <span
-                      className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${statusStyles[event.status] ?? ''}`}
-                    >
-                      {event.status.replace('_', ' ')}
-                    </span>
-                    {event.seatingType === 'GENERAL' && event.gaPriceCents !== null && (
-                      <span className="text-sm font-medium">{formatPrice(event.gaPriceCents)}</span>
-                    )}
-                  </div>
-                </div>
-              </Link>
-            </li>
-          ))}
-        </ul>
-      )}
+    <main>
+      <section className="relative overflow-hidden px-6 pb-16 pt-20 text-center">
+        <p className="mb-4 inline-block rounded-full border border-fuchsia-400/30 bg-fuchsia-500/10 px-4 py-1 text-xs font-medium tracking-wide text-fuchsia-300">
+          Zero overselling — proven under 500+ concurrent bookings
+        </p>
+        <h1 className="mx-auto max-w-3xl font-[family-name:var(--font-display)] text-4xl font-bold leading-tight tracking-tight text-white sm:text-6xl">
+          Find the show. <span className="text-fuchsia-400">Pick your seat.</span>
+        </h1>
+        <p className="mx-auto mt-5 max-w-xl text-slate-400">
+          Browse live events, watch seats fill up in real time, and check out in seconds — built
+          to never oversell, even when everyone clicks &ldquo;book&rdquo; at once.
+        </p>
+      </section>
+
+      <section className="mx-auto max-w-6xl px-6 pb-24">
+        {items.length === 0 ? (
+          <p className="text-center text-slate-400">No events yet.</p>
+        ) : (
+          <EventBrowser events={items} />
+        )}
+      </section>
     </main>
   );
 }

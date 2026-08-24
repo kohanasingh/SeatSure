@@ -1,1 +1,49 @@
 @import 'tailwindcss';
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  background-color: #05050a;
+}
+
+/* Soft multi-blob gradient wash used behind every page — cheap (no images,
+   no JS), fixed so it doesn't repaint on scroll. */
+.app-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background:
+    radial-gradient(60rem 40rem at 15% -10%, rgba(217, 70, 239, 0.18), transparent 60%),
+    radial-gradient(50rem 40rem at 110% 10%, rgba(56, 189, 248, 0.14), transparent 60%),
+    radial-gradient(60rem 50rem at 50% 120%, rgba(99, 102, 241, 0.16), transparent 60%),
+    #05050a;
+}
+
+.glass {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(12px);
+}
+
+::-webkit-scrollbar {
+  height: 8px;
+  width: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 9999px;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}

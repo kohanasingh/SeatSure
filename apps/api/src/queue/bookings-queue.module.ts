@@ -14,7 +14,11 @@ export const PROCESS_BOOKING_JOB = 'process-booking';
 export const SEND_CONFIRMATION_JOB = 'send-confirmation';
 
 export interface ProcessBookingJobData {
-  bookingId: string;
+  // One id per seat in input.seatIds, same order — pre-minted so the PENDING
+  // rows created before enqueue and the ones the worker upserts are the same
+  // rows either way.
+  bookingIds: string[];
+  orderId: string;
   user: AuthenticatedUser;
   input: CreateBookingInput;
   meta: BookingRequestMeta;

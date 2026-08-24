@@ -8,6 +8,12 @@ a k6 spike test that sells exactly 400 of 400 seats under 500 concurrent users.
 
 **Live:** https://seatsure-web.vercel.app
 
+> **This is a backend-focused project.** The distributed-lock + queue booking
+> pipeline, the atomic multi-seat transaction, and the zero-oversell guarantee
+> below are the actual engineering; the frontend exists to make that backend
+> worth digging into, not the other way around. If you're reviewing this,
+> start at [How overselling is prevented](#how-overselling-is-prevented--five-defense-layers).
+
 ## Architecture
 
 ```mermaid
@@ -32,8 +38,10 @@ flowchart TD
     end
 ```
 
-- **apps/web** — Next.js 16 (SSR event list, live seat grid, mock checkout);
-  type-safe API calls via a type-only tRPC `AppRouter` import.
+- **apps/web** — Next.js 16 (SSR event browsing with search and photo
+  cards, live multi-seat selection, mock checkout); type-safe API calls via a
+  type-only tRPC `AppRouter` import. Deliberately the more polished layer —
+  see the framing note above.
 - **apps/api** — NestJS 11: REST auth (rotating refresh tokens with
   family-reuse revocation), tRPC router, Socket.io gateway and BullMQ worker
   in one long-lived process.
@@ -81,6 +89,30 @@ Contention path: a failed lock acquisition creates a PENDING booking and
 enqueues it (BullMQ, 3 attempts, exponential backoff); the outcome is pushed
 over Socket.io (`booking-status`) with a polling fallback, and seat maps flip
 live via `seat-updated` in under a second.
+
+### Multi-seat orders are atomic, not just single seats
+
+Each ASSIGNED event has a configurable `maxSeatsPerOrder` (an integer cap, or
+`null` for unrestricted — still bounded by a shared hard ceiling so no order
+is unbounded). Booking `N` seats in one checkout is still **one Prisma
+transaction**: every seat's guarded `UPDATE ... WHERE status = 'AVAILABLE'`
+must succeed, or the whole order — including seats whose CAS already
+succeeded earlier in the loop — rolls back together. There is no
+intermediate state where 2 of 3 requested seats are booked and the third
+failed.
+
+Locking generalizes the same way: all of an order's per-seat Redis locks are
+acquired up front, in a fixed (sorted) order across seat IDs, so two
+concurrent multi-seat orders that both want `{seatA, seatB}` can never
+deadlock by each holding one and waiting on the other — the standard
+fixed-ordering deadlock-avoidance rule. If even one lock in the order is
+already held, the *entire* order falls through to the queue (Path B) rather
+than partially proceeding.
+
+One payment-provider charge is made per order (a card is swiped once per
+checkout), then split into one `Transaction` ledger row per seat — so
+per-seat fraud signals stay exactly as granular as before, and every ledger
+row still traces back to the one charge via a shared `paymentProviderRef`.
 
 ## Load test (k6 booking spike)
 

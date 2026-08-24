@@ -44,26 +44,26 @@ export function AuthForm({ mode }: AuthFormProps) {
   }
 
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center p-8">
-      <form onSubmit={onSubmit} className="w-full max-w-sm space-y-4" noValidate>
-        <h1 className="text-2xl font-bold tracking-tight">
-          {isLogin ? 'Log in' : 'Create an account'}
+    <main className="flex min-h-[calc(100vh-64px)] flex-col items-center justify-center p-8">
+      <form onSubmit={onSubmit} className="glass w-full max-w-sm space-y-4 rounded-2xl p-7" noValidate>
+        <h1 className="font-[family-name:var(--font-display)] text-2xl font-bold tracking-tight text-white">
+          {isLogin ? 'Welcome back' : 'Create an account'}
         </h1>
 
         <label className="block space-y-1">
-          <span className="text-sm font-medium text-gray-700">Email</span>
+          <span className="text-sm font-medium text-slate-300">Email</span>
           <input
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             autoComplete="email"
             required
-            className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-gray-900 focus:outline-none"
+            className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white focus:border-fuchsia-400 focus:outline-none"
           />
         </label>
 
         <label className="block space-y-1">
-          <span className="text-sm font-medium text-gray-700">Password</span>
+          <span className="text-sm font-medium text-slate-300">Password</span>
           <input
             type="password"
             value={password}
@@ -71,32 +71,32 @@ export function AuthForm({ mode }: AuthFormProps) {
             autoComplete={isLogin ? 'current-password' : 'new-password'}
             required
             minLength={isLogin ? 1 : 8}
-            className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-gray-900 focus:outline-none"
+            className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white focus:border-fuchsia-400 focus:outline-none"
           />
         </label>
 
-        {error && <p className="text-sm text-red-600">{error}</p>}
+        {error && <p className="text-sm text-rose-400">{error}</p>}
 
         <button
           type="submit"
           disabled={submitting}
-          className="w-full rounded-md bg-gray-900 px-3 py-2 text-sm font-medium text-white hover:bg-gray-700 disabled:opacity-50"
+          className="w-full rounded-full bg-fuchsia-500 px-3 py-2.5 text-sm font-semibold text-white shadow-lg shadow-fuchsia-500/30 transition-transform hover:scale-[1.02] hover:bg-fuchsia-400 disabled:opacity-50"
         >
           {submitting ? 'Please wait…' : isLogin ? 'Log in' : 'Register'}
         </button>
 
-        <p className="text-sm text-gray-600">
+        <p className="text-sm text-slate-400">
           {isLogin ? (
             <>
               No account?{' '}
-              <Link href="/register" className="font-medium underline">
+              <Link href="/register" className="font-medium text-fuchsia-300 underline underline-offset-4">
                 Register
               </Link>
             </>
           ) : (
             <>
               Already have an account?{' '}
-              <Link href="/login" className="font-medium underline">
+              <Link href="/login" className="font-medium text-fuchsia-300 underline underline-offset-4">
                 Log in
               </Link>
             </>

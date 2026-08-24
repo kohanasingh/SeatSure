@@ -53,7 +53,9 @@ export class EventsAdminService {
           },
         });
       }
-      const created = await tx.event.create({ data: base });
+      const created = await tx.event.create({
+        data: { ...base, maxSeatsPerOrder: input.maxSeatsPerOrder ?? null },
+      });
       await tx.seat.createMany({
         data: generateSeats(input.seatLayout).map((s) => ({ ...s, eventId: created.id })),
       });

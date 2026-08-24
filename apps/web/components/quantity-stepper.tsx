@@ -40,8 +40,8 @@ export function QuantityStepper({
   const soldOut = remaining <= 0;
 
   return (
-    <div className="space-y-4 rounded-lg border border-gray-200 p-4">
-      <p className="text-sm text-gray-600" data-remaining>
+    <div className="glass space-y-4 rounded-2xl p-5">
+      <p className="text-sm text-slate-300" data-remaining>
         {soldOut ? 'Sold out' : `${remaining} tickets remaining`}
       </p>
 
@@ -51,24 +51,24 @@ export function QuantityStepper({
             type="button"
             onClick={() => setQty((q) => Math.max(1, q - 1))}
             disabled={soldOut || qty <= 1}
-            className="h-8 w-8 rounded-md border border-gray-300 font-medium disabled:opacity-40"
+            className="h-9 w-9 rounded-full border border-white/15 font-medium text-white hover:bg-white/5 disabled:opacity-40"
           >
             −
           </button>
-          <span className="w-8 text-center font-semibold" data-qty>
+          <span className="w-8 text-center font-semibold text-white" data-qty>
             {qty}
           </span>
           <button
             type="button"
             onClick={() => setQty((q) => Math.min(max, q + 1))}
             disabled={soldOut || qty >= max}
-            className="h-8 w-8 rounded-md border border-gray-300 font-medium disabled:opacity-40"
+            className="h-9 w-9 rounded-full border border-white/15 font-medium text-white hover:bg-white/5 disabled:opacity-40"
           >
             +
           </button>
         </div>
-        <p className="text-sm">
-          Total: <span className="font-semibold">{formatPrice(priceCents * qty)}</span>
+        <p className="text-sm text-slate-300">
+          Total: <span className="font-semibold text-fuchsia-300">{formatPrice(priceCents * qty)}</span>
         </p>
       </div>
 
@@ -77,14 +77,14 @@ export function QuantityStepper({
           type="button"
           disabled={soldOut}
           onClick={() => router.push(`/checkout?eventId=${eventId}&qty=${qty}`)}
-          className="w-full rounded-md bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700 disabled:opacity-50"
+          className="w-full rounded-full bg-fuchsia-500 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-fuchsia-500/30 transition-transform hover:scale-[1.02] hover:bg-fuchsia-400 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:scale-100"
         >
           {soldOut ? 'Sold out' : 'Book tickets'}
         </button>
       ) : (
         <Link
           href="/login"
-          className="block w-full rounded-md bg-gray-900 px-4 py-2 text-center text-sm font-medium text-white hover:bg-gray-700"
+          className="block w-full rounded-full bg-fuchsia-500 px-4 py-2.5 text-center text-sm font-semibold text-white shadow-lg shadow-fuchsia-500/30 hover:bg-fuchsia-400"
         >
           Log in to book
         </Link>

@@ -34,7 +34,8 @@ interface BookingBody {
 
 interface BookingResponse {
   httpStatus: number;
-  booking?: BookingBody;
+  booking?: BookingBody; // first row of the order — sufficient for single-seat assertions
+  bookings?: BookingBody[];
   errorMessage?: string;
 }
 
@@ -57,6 +58,7 @@ describe('Bookings concurrency (e2e)', () => {
 
   const createAssignedEvent = async (
     seats: { seatNumber: string; priceCents: number }[],
+    maxSeatsPerOrder: number | null = null,
   ): Promise<string> => {
     const event = await prisma.event.create({
       data: {
@@ -66,6 +68,7 @@ describe('Bookings concurrency (e2e)', () => {
         status: 'ON_SALE',
         seatingType: 'ASSIGNED',
         organizerId: userId,
+        maxSeatsPerOrder,
         seats: { createMany: { data: seats } },
       },
     });
@@ -100,7 +103,8 @@ describe('Bookings concurrency (e2e)', () => {
       .set('Idempotency-Key', idempotencyKey)
       .send(body);
     if (res.status === 200) {
-      return { httpStatus: res.status, booking: res.body.result.data as BookingBody };
+      const bookings = res.body.result.data as BookingBody[];
+      return { httpStatus: res.status, booking: bookings[0], bookings };
     }
     return { httpStatus: res.status, errorMessage: res.body.error?.message as string };
   };
@@ -183,7 +187,7 @@ describe('Bookings concurrency (e2e)', () => {
 
     const results = await Promise.all(
       Array.from({ length: 100 }, () =>
-        book({ kind: 'assigned', eventId: assignedEventId, seatId: seat.id }),
+        book({ kind: 'assigned', eventId: assignedEventId, seatIds: [seat.id] }),
       ),
     );
 
@@ -257,7 +261,7 @@ describe('Bookings concurrency (e2e)', () => {
   it('4. payment failure (amount ending 99) → booking FAILED, seat still AVAILABLE, no transaction row', async () => {
     const seat = await seatByNumber('Z1'); // priceCents 9999
 
-    const result = await book({ kind: 'assigned', eventId: assignedEventId, seatId: seat.id });
+    const result = await book({ kind: 'assigned', eventId: assignedEventId, seatIds: [seat.id] });
 
     expect(result.httpStatus).toBe(200);
     expect(result.booking!.status).toBe('FAILED');
@@ -278,7 +282,7 @@ describe('Bookings concurrency (e2e)', () => {
     // (payment step) when we steal the lock
     process.env.SIMULATE_PAYMENT_LATENCY_MS = '1500';
     try {
-      const first = book({ kind: 'assigned', eventId: assignedEventId, seatId: seat.id });
+      const first = book({ kind: 'assigned', eventId: assignedEventId, seatIds: [seat.id] });
       // wait for the actual lock to appear rather than assuming a fixed
       // delay is enough for the first request to reach the payment step
       await pollUntil(async () => (await redis.exists(seatLockKey(seat.id))) === 1);
@@ -288,7 +292,7 @@ describe('Bookings concurrency (e2e)', () => {
       process.env.SIMULATE_PAYMENT_LATENCY_MS = '0';
       // second request now acquires the lock freely — layer 2 must stop it
       const second_result = await book(
-        { kind: 'assigned', eventId: assignedEventId, seatId: seat.id },
+        { kind: 'assigned', eventId: assignedEventId, seatIds: [seat.id] },
         { token: second.token },
       );
       const first_result = await first;
@@ -304,5 +308,60 @@ describe('Bookings concurrency (e2e)', () => {
     } finally {
       process.env.SIMULATE_PAYMENT_LATENCY_MS = '0';
     }
+  });
+
+  it('6. multi-seat order over the cap is rejected, none of its seats are touched', async () => {
+    const eventId = await createAssignedEvent(
+      Array.from({ length: 4 }, (_, i) => ({ seatNumber: `B${i + 1}`, priceCents: 4_000 })),
+      2, // cap: 2 seats per order
+    );
+    const seats = await prisma.seat.findMany({ where: { eventId }, orderBy: { seatNumber: 'asc' } });
+    const seatIds = seats.slice(0, 3).map((s) => s.id); // 3 > cap of 2
+
+    const result = await book({ kind: 'assigned', eventId, seatIds });
+
+    expect(result.errorMessage).toBe('SEAT_LIMIT_EXCEEDED');
+    const stillAvailable = await prisma.seat.count({ where: { eventId, status: 'AVAILABLE' } });
+    expect(stillAvailable).toBe(4); // nothing was touched
+  });
+
+  it('7. multi-seat order within the cap confirms all seats atomically, one order, N transactions', async () => {
+    const eventId = await createAssignedEvent(
+      [
+        { seatNumber: 'C1', priceCents: 3_000 },
+        { seatNumber: 'C2', priceCents: 3_500 },
+      ],
+      2,
+    );
+    const seats = await prisma.seat.findMany({ where: { eventId } });
+    const seatIds = seats.map((s) => s.id);
+
+    const result = await book({ kind: 'assigned', eventId, seatIds });
+
+    expect(result.bookings).toHaveLength(2);
+    expect(result.bookings!.every((b) => b.status === 'CONFIRMED')).toBe(true);
+    const orderId = (
+      await prisma.booking.findUniqueOrThrow({ where: { id: result.bookings![0]!.id } })
+    ).orderId;
+    expect(orderId).not.toBeNull();
+    expect(await prisma.booking.count({ where: { orderId } })).toBe(2);
+    expect(await prisma.seat.count({ where: { eventId, status: 'BOOKED' } })).toBe(2);
+    expect(
+      await prisma.transaction.count({ where: { bookingId: { in: result.bookings!.map((b) => b.id) } } }),
+    ).toBe(2); // one transaction row per seat, sharing the order's single charge
+  });
+
+  it('8. an unrestricted event (maxSeatsPerOrder null) allows an order up to the shared hard cap', async () => {
+    const eventId = await createAssignedEvent(
+      Array.from({ length: 6 }, (_, i) => ({ seatNumber: `D${i + 1}`, priceCents: 2_000 })),
+      null, // unrestricted
+    );
+    const seats = await prisma.seat.findMany({ where: { eventId } });
+    const seatIds = seats.map((s) => s.id); // 6 seats, well under the hard cap
+
+    const result = await book({ kind: 'assigned', eventId, seatIds });
+
+    expect(result.bookings).toHaveLength(6);
+    expect(result.bookings!.every((b) => b.status === 'CONFIRMED')).toBe(true);
   });
 });

@@ -22,6 +22,7 @@ export interface EventDto {
   totalCapacity: number | null;
   remainingCapacity: number | null;
   gaPriceCents: number | null;
+  maxSeatsPerOrder: number | null; // ASSIGNED only; null = unrestricted
   organizerId: string;
   createdAt: string;
 }
@@ -50,6 +51,7 @@ export const toEventDto = (e: Event): EventDto => ({
   totalCapacity: e.totalCapacity,
   remainingCapacity: e.remainingCapacity,
   gaPriceCents: e.gaPriceCents,
+  maxSeatsPerOrder: e.maxSeatsPerOrder,
   organizerId: e.organizerId,
   createdAt: e.createdAt.toISOString(),
 });

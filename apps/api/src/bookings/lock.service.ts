@@ -58,4 +58,33 @@ export class LockService {
       throw err;
     }
   }
+
+  /**
+   * Multi-seat orders (ARCHITECTURE.md §4): acquire every seat's lock before
+   * touching Postgres. Seat IDs are sorted first so two concurrent orders
+   * that both want {seatA, seatB} always try to lock them in the same
+   * order — the standard fixed-ordering deadlock-avoidance rule; without it
+   * two overlapping multi-seat orders could each hold one lock and wait
+   * forever on the other.
+   *
+   * All-or-nothing: any single failed acquisition releases everything already
+   * held and returns null (→ caller falls back to the queued Path B for the
+   * whole order, same as a single-seat contention).
+   */
+  async acquireSeatLocks(seatIds: string[]): Promise<SeatLock[] | null> {
+    const held: SeatLock[] = [];
+    for (const seatId of [...seatIds].sort()) {
+      const lock = await this.acquireSeatLock(seatId);
+      if (!lock) {
+        await this.releaseAll(held);
+        return null;
+      }
+      held.push(lock);
+    }
+    return held;
+  }
+
+  async releaseAll(locks: SeatLock[]): Promise<void> {
+    await Promise.all(locks.map((lock) => this.release(lock)));
+  }
 }

@@ -19,6 +19,8 @@ export const createEventSchema = z.discriminatedUnion('seatingType', [
   eventBase.extend({
     seatingType: z.literal('ASSIGNED'),
     seatLayout: seatLayoutSchema,
+    // null/omitted = unrestricted (still bounded by MAX_SEATS_PER_ORDER_HARD_CAP)
+    maxSeatsPerOrder: z.number().int().min(1).max(12).nullable().optional(),
   }),
   eventBase.extend({
     seatingType: z.literal('GENERAL'),
@@ -37,6 +39,7 @@ export const updateEventSchema = z.object({
   venue: z.string().max(200).optional(),
   eventTime: z.coerce.date().optional(),
   onSaleAt: z.coerce.date().optional(),
+  maxSeatsPerOrder: z.number().int().min(1).max(12).nullable().optional(),
 });
 export type UpdateEventInput = z.infer<typeof updateEventSchema>;
 

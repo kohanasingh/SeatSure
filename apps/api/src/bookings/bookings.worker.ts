@@ -53,7 +53,9 @@ export class BookingsWorker implements OnModuleInit, OnApplicationShutdown {
         job.attemptsMade >= (job.opts.attempts ?? 1)
       ) {
         const data = job.data as ProcessBookingJobData;
-        void this.bookings.failBooking(data.bookingId, data.user.id, 'RETRIES_EXHAUSTED');
+        for (const bookingId of data.bookingIds) {
+          void this.bookings.failBooking(bookingId, data.user.id, 'RETRIES_EXHAUSTED');
+        }
       }
     });
   }
@@ -66,7 +68,7 @@ export class BookingsWorker implements OnModuleInit, OnApplicationShutdown {
       // req= carries the originating HTTP request id (pino genReqId) into
       // worker output — the §10 web → api → worker correlation
       this.logger.log(
-        `processed booking ${data.bookingId} in ${Date.now() - startedAt}ms ` +
+        `processed order ${data.orderId} (${data.bookingIds.length} seat${data.bookingIds.length > 1 ? 's' : ''}) in ${Date.now() - startedAt}ms ` +
           `(attempt ${job.attemptsMade + 1}, req=${data.meta.requestId ?? 'n/a'})`,
       );
       return;

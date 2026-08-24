@@ -72,15 +72,17 @@ async function main(): Promise<void> {
   const assignedSpecs = [
     {
       title: 'Indie Rock Night',
-      description: 'Reserved seating. Pick your seat from the live map.',
+      description: 'Reserved seating. Pick your seats from the live map — up to 2 per order.',
       venue: 'The Velvet Hall',
       eventTime: new Date(now + 14 * DAY_MS),
+      maxSeatsPerOrder: 2, // restricted: max 2 seats per order
     },
     {
       title: 'Standup Comedy Gala',
-      description: 'Reserved seating. Front rows cost more.',
+      description: 'Reserved seating. Front rows cost more. No limit on seats per order.',
       venue: 'Laugh Factory Arena',
       eventTime: new Date(now + 21 * DAY_MS),
+      maxSeatsPerOrder: null, // unrestricted
     },
   ];
 

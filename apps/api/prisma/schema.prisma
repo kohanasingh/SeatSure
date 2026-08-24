@@ -76,6 +76,9 @@ model Event {
   remainingCapacity Int?
   gaPriceCents      Int?
   // ASSIGNED only: capacity derived from seats
+  // Per-order seat cap for ASSIGNED events. null = unrestricted (bounded only
+  // by MAX_SEATS_PER_ORDER_HARD_CAP in the shared zod schema). Ignored for GENERAL.
+  maxSeatsPerOrder  Int?
   organizerId       String
   createdAt         DateTime    @default(now())
   seats             Seat[]
@@ -106,6 +109,10 @@ model Booking {
   seatId      String? // null for GENERAL
   seat        Seat?         @relation(fields: [seatId], references: [id])
   quantity    Int           @default(1) // >1 only for GENERAL
+  // Groups sibling rows created by one multi-seat ASSIGNED checkout (one row
+  // per seat) so they can be displayed/queried/rolled-back together. Null for
+  // GENERAL (a single row already represents the whole order there).
+  orderId     String?
   status      BookingStatus @default(PENDING)
   failReason  String?
   createdAt   DateTime      @default(now())
@@ -114,6 +121,7 @@ model Booking {
 
   @@index([userId])
   @@index([eventId, status])
+  @@index([orderId])
 }
 
 model Transaction {
