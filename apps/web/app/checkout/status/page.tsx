@@ -69,7 +69,6 @@ function StatusInner() {
       clearInterval(interval);
     };
     // ids is derived fresh from params each render but stable in content for a given order
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, ids.join(',')]);
 
   if (ids.length === 0) {

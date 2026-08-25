@@ -25,7 +25,7 @@ import { RateLimitService } from '../redis/rate-limit.service';
 import { isRedisUnavailableError } from '../redis/redis-errors.util';
 import { REDIS_CLIENT } from '../redis/redis.constants';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
-import { LockService, SeatLock } from './lock.service';
+import { LockService } from './lock.service';
 
 const IDEM_TTL_SECONDS = 24 * 60 * 60; // spec §5: idem:<userId>:<key> → orderId, 24h
 const TX_OPTIONS = { maxWait: 10_000, timeout: 20_000 } as const;
