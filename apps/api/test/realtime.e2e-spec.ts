@@ -171,9 +171,9 @@ describe('Realtime (e2e)', () => {
       (p) => p.seatId === seat.id,
       5_000,
     );
-    const res = await book({ kind: 'assigned', eventId, seatId: seat.id });
+    const res = await book({ kind: 'assigned', eventId, seatIds: [seat.id] });
     expect(res.status).toBe(200);
-    expect(res.body.result.data.status).toBe('CONFIRMED');
+    expect(res.body.result.data[0].status).toBe('CONFIRMED');
 
     const { payload, elapsedMs } = await seatUpdated;
     expect(payload.status).toBe('BOOKED');
@@ -206,10 +206,10 @@ describe('Realtime (e2e)', () => {
     // simulate contention: an external holder owns the seat lock
     await redis.set(seatLockKey(seat.id), 'external-holder', 'PX', 2_500);
 
-    const res = await book({ kind: 'assigned', eventId, seatId: seat.id });
+    const res = await book({ kind: 'assigned', eventId, seatIds: [seat.id] });
     expect(res.status).toBe(200);
-    expect(res.body.result.data.status).toBe('PENDING'); // Path B: 202-pending semantics
-    const bookingId = res.body.result.data.id as string;
+    expect(res.body.result.data[0].status).toBe('PENDING'); // Path B: 202-pending semantics
+    const bookingId = res.body.result.data[0].id as string;
 
     // BullMQ retries with backoff; once the external lock expires the worker
     // confirms and pushes to the user room

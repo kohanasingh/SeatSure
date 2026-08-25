@@ -63,7 +63,7 @@ describe('Redis unavailable (e2e)', () => {
         .post('/trpc/bookings.create')
         .set('Authorization', `Bearer ${token}`)
         .set('Idempotency-Key', randomUUID())
-        .send({ kind: 'assigned', eventId: event.id, seatId: event.seats[0]!.id });
+        .send({ kind: 'assigned', eventId: event.id, seatIds: [event.seats[0]!.id] });
 
       expect(res.status).toBe(503);
     } finally {
