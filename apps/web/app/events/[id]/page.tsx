@@ -65,12 +65,19 @@ export default async function EventDetailPage({ params }: { params: Promise<{ id
         ))}
       </div>
 
-      {event.description && (
+           {event.description && (
         <div className="glass rounded-2xl p-5">
           <h2 className="mb-2 font-[family-name:var(--font-display)] text-sm font-bold uppercase tracking-wide text-slate-400">
             About this show
           </h2>
           <p className="leading-relaxed text-slate-200">{event.description}</p>
+          <p className="mt-3 text-sm text-slate-400">
+            {event.seatingType === 'GENERAL'
+              ? 'General admission — no assigned seats, up to 8 tickets per order.'
+              : event.maxSeatsPerOrder != null
+                ? `Reserved seating — up to ${event.maxSeatsPerOrder} seat${event.maxSeatsPerOrder > 1 ? 's' : ''} per order.`
+                : 'Reserved seating — no limit on seats per order.'}
+          </p>
         </div>
       )}
 

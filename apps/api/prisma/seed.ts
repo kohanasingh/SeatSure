@@ -55,7 +55,7 @@ async function main(): Promise<void> {
   const ga = await prisma.event.create({
     data: {
       title: 'Summer Music Festival',
-      description: 'Open-air general admission festival. First come, first served.',
+      description:  'A full day of live sets across three stages, food trucks, and a sunset headliner slot as the city\'s biggest open-air festival returns for another summer.',
       venue: 'Riverside Grounds',
       eventTime: new Date(now + 30 * DAY_MS),
       onSaleAt: new Date(now - 1 * DAY_MS),
@@ -71,15 +71,17 @@ async function main(): Promise<void> {
   // 2 ASSIGNED seating events, 10 rows x 20 seats = 200 seats each
   const assignedSpecs = [
     {
-      title: 'Indie Rock Night',
-      description: 'Reserved seating. Pick your seats from the live map — up to 2 per order.',
+           title: 'Indie Rock Night',
+      description:
+        'Four up-and-coming indie acts share the bill for one late night at The Velvet Hall, closing with a full-band headline set.',
       venue: 'The Velvet Hall',
       eventTime: new Date(now + 14 * DAY_MS),
       maxSeatsPerOrder: 2, // restricted: max 2 seats per order
     },
     {
       title: 'Standup Comedy Gala',
-      description: 'Reserved seating. Front rows cost more. No limit on seats per order.',
+      description:
+        'A lineup of touring comedians for one night only, recorded live for an upcoming streaming special.',
       venue: 'Laugh Factory Arena',
       eventTime: new Date(now + 21 * DAY_MS),
       maxSeatsPerOrder: null, // unrestricted
