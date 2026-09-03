@@ -8,11 +8,42 @@ a k6 spike test that sells exactly 400 of 400 seats under 500 concurrent users.
 
 **Live:** https://seatsure-web.vercel.app
 
-> **This is a backend-focused project.** The distributed-lock + queue booking
-> pipeline, the atomic multi-seat transaction, and the zero-oversell guarantee
-> below are the actual engineering; the frontend exists to make that backend
-> worth digging into, not the other way around. If you're reviewing this,
-> start at [How overselling is prevented](#how-overselling-is-prevented--five-defense-layers).
+> **Backend-focused project.** The primary engineering focus is the
+high-concurrency booking system: distributed locking, queue-based
+contention handling, atomic multi-seat transactions, and the zero-oversell
+guarantee. The frontend provides a complete interface for exploring and
+demonstrating these backend capabilities.
+## Key results
+
+| Metric | Result |
+|---|---:|
+| Concurrent virtual users | 500 |
+| Booking attempts | 12,057 |
+| Seats available | 400 |
+| Confirmed bookings | **400** |
+| Oversold seats | **0** |
+| HTTP failure rate | 0.00% |
+| p95 latency | 102.28 ms |
+
+Full methodology and verification in [Load test](#load-test-k6-booking-spike) below.
+
+## Tech stack
+
+| Layer | Technology |
+|---|---|
+| Frontend | Next.js 16, React 19, TypeScript |
+| Backend | NestJS 11 (Node.js), TypeScript |
+| API | tRPC (typed RPC over HTTP), REST for auth |
+| Database | PostgreSQL 16 (source of truth) |
+| ORM | Prisma |
+| Concurrency | Redis distributed locks, optimistic concurrency, conditional updates |
+| Queue | BullMQ (contention path, 10-way concurrency) |
+| Realtime | Socket.io |
+| Validation | Zod, shared across web + API |
+| Testing | Jest/Vitest (e2e against real Postgres+Redis), Playwright, k6 |
+| Infra | Docker, Docker Compose, nginx |
+| CI/CD | GitHub Actions |
+| Deployment | Vercel (web), GCP VM via Docker Compose (API) |
 
 ## Architecture
 
@@ -90,29 +121,22 @@ enqueues it (BullMQ, 3 attempts, exponential backoff); the outcome is pushed
 over Socket.io (`booking-status`) with a polling fallback, and seat maps flip
 live via `seat-updated` in under a second.
 
-### Multi-seat orders are atomic, not just single seats
+### Multi-seat orders are atomic
 
-Each ASSIGNED event has a configurable `maxSeatsPerOrder` (an integer cap, or
-`null` for unrestricted — still bounded by a shared hard ceiling so no order
-is unbounded). Booking `N` seats in one checkout is still **one Prisma
-transaction**: every seat's guarded `UPDATE ... WHERE status = 'AVAILABLE'`
-must succeed, or the whole order — including seats whose CAS already
-succeeded earlier in the loop — rolls back together. There is no
-intermediate state where 2 of 3 requested seats are booked and the third
-failed.
+Each `ASSIGNED` event has a configurable `maxSeatsPerOrder` (or `null` for
+unrestricted, subject to a shared hard ceiling).
 
-Locking generalizes the same way: all of an order's per-seat Redis locks are
-acquired up front, in a fixed (sorted) order across seat IDs, so two
-concurrent multi-seat orders that both want `{seatA, seatB}` can never
-deadlock by each holding one and waiting on the other — the standard
-fixed-ordering deadlock-avoidance rule. If even one lock in the order is
-already held, the *entire* order falls through to the queue (Path B) rather
-than partially proceeding.
+Booking `N` seats uses **one Prisma transaction**: every guarded
+`UPDATE ... WHERE status = 'AVAILABLE'` must succeed, or the entire order
+rolls back. There is never a partial 2-of-3 booking.
 
-One payment-provider charge is made per order (a card is swiped once per
-checkout), then split into one `Transaction` ledger row per seat — so
-per-seat fraud signals stay exactly as granular as before, and every ledger
-row still traces back to the one charge via a shared `paymentProviderRef`.
+All Redis locks are acquired **up front in sorted seat-ID order**, preventing
+deadlocks between overlapping multi-seat orders. If any lock is unavailable,
+the **entire order** goes to the queue rather than partially proceeding.
+
+One payment-provider charge is made per order, then split into one
+`Transaction` ledger row per seat, with a shared `paymentProviderRef` for
+traceability.
 
 ## Load test (k6 booking spike)
 
@@ -147,7 +171,6 @@ capacity control).
 
 **RESULT: ZERO OVERSELL ✓** — 12,057 spike attempts, exactly 400 seats sold,
 one confirmed booking per seat, every confirmed booking has a payment record.
-
 
 ## Payments: the Stripe seam
 
