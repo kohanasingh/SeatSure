@@ -25,3 +25,4 @@ api-load.log
 k6-*.log
 .vercel
 .env*
+*.bak
